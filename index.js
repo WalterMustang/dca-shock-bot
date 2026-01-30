@@ -2,10 +2,48 @@
 
 const { Telegraf, Markup } = require("telegraf");
 
-const token = process.env.BOT_TOKEN;
+// Export core functions for testing (when required as module)
+const isTestMode = process.env.NODE_ENV === "test";
+
+// Initialize bot (skip token validation in test mode)
+const token = process.env.BOT_TOKEN || (isTestMode ? "test-token" : null);
 if (!token) throw new Error("Missing BOT_TOKEN env var");
 
 const bot = new Telegraf(token);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Constants & Presets
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PRESETS = {
+  base: { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -30, shockYear: 3 },
+  bull: { weeklyAmount: 100, years: 10, annualReturnPct: 12, annualFeePct: 0, shockPct: null, shockYear: null },
+  pain: { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -50, shockYear: 2 }
+};
+
+const DEFAULTS = {
+  weeklyAmount: 100,
+  years: 10,
+  annualReturnPct: 7,
+  annualFeePct: 0,
+  shockPct: null,
+  shockYear: null
+};
+
+const LIMITS = {
+  weeklyAmount: { min: 0, max: 1_000_000 },
+  years: { min: 0, max: 50 },
+  annualReturnPct: { min: -100, max: 200 },
+  annualFeePct: { min: 0, max: 5 },
+  shockPct: { min: -95, max: 0 }
+};
+
+const RATE_LIMIT = {
+  command: 900,
+  button: 350,
+  cleanupInterval: 60_000,
+  maxAge: 300_000
+};
 
 // Log incoming messages (debug)
 bot.use(async (ctx, next) => {
@@ -14,12 +52,23 @@ bot.use(async (ctx, next) => {
   return next();
 });
 
-// In-memory state per user
+// ─────────────────────────────────────────────────────────────────────────────
+// State Management
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** @type {Map<number, object>} In-memory state per user */
 const userState = new Map();
 
-// Simple per-user rate limit
+/** @type {Map<number, number>} Last call timestamp per user for rate limiting */
 const lastCall = new Map();
-function isRateLimited(userId, ms = 900) {
+
+/**
+ * Check if user is rate limited and update their last call timestamp
+ * @param {number} userId - Telegram user ID
+ * @param {number} ms - Minimum milliseconds between calls
+ * @returns {boolean} True if rate limited
+ */
+function isRateLimited(userId, ms = RATE_LIMIT.command) {
   const now = Date.now();
   const last = lastCall.get(userId) || 0;
   if (now - last < ms) return true;
@@ -27,7 +76,38 @@ function isRateLimited(userId, ms = 900) {
   return false;
 }
 
-// HTML escape for captions
+/**
+ * Periodically clean up stale entries from Maps to prevent memory leaks
+ */
+function cleanupStaleSessions() {
+  const now = Date.now();
+  let cleaned = 0;
+
+  for (const [userId, timestamp] of lastCall.entries()) {
+    if (now - timestamp > RATE_LIMIT.maxAge) {
+      lastCall.delete(userId);
+      userState.delete(userId);
+      cleaned++;
+    }
+  }
+
+  if (cleaned > 0) {
+    console.log(`Cleaned up ${cleaned} stale session(s)`);
+  }
+}
+
+// Run cleanup periodically
+const cleanupTimer = setInterval(cleanupStaleSessions, RATE_LIMIT.cleanupInterval);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Utility Functions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Escape HTML special characters for Telegram captions
+ * @param {string} s - String to escape
+ * @returns {string} HTML-escaped string
+ */
 function escHtml(s) {
   return String(s)
     .replaceAll("&", "&amp;")
@@ -35,17 +115,48 @@ function escHtml(s) {
     .replaceAll(">", "&gt;");
 }
 
+/**
+ * Convert value to number with fallback
+ * @param {any} x - Value to convert
+ * @param {number} fallback - Fallback if conversion fails
+ * @returns {number} Converted number or fallback
+ */
 function toNum(x, fallback) {
   const n = Number(x);
   return Number.isFinite(n) ? n : fallback;
 }
 
+/**
+ * Clamp a value between min and max
+ * @param {number} value - Value to clamp
+ * @param {number} min - Minimum bound
+ * @param {number} max - Maximum bound
+ * @returns {number} Clamped value
+ */
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Financial Calculations
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Convert annual return percentage to weekly compound rate
+ * @param {number} annualPct - Annual return percentage (e.g., 7 for 7%)
+ * @returns {number} Weekly rate as decimal
+ */
 function weeklyRateFromAnnual(annualPct) {
   const a = annualPct / 100;
   if (a <= -1) return -1;
   return Math.pow(1 + a, 1 / 52) - 1;
 }
 
+/**
+ * Convert annual fee percentage to weekly fee factor
+ * @param {number} feePct - Annual fee percentage (e.g., 0.5 for 0.5%)
+ * @returns {number} Weekly multiplier (e.g., 0.9999 for small fees)
+ */
 function weeklyFeeFactorFromAnnual(feePct) {
   const f = feePct / 100;
   if (f <= 0) return 1;
@@ -53,26 +164,57 @@ function weeklyFeeFactorFromAnnual(feePct) {
   return Math.pow(1 - f, 1 / 52);
 }
 
+/**
+ * Validate and clamp simulation parameters to safe ranges
+ * @param {object} p - Raw parameters
+ * @returns {object} Validated and clamped parameters
+ */
 function clampParams(p) {
-  const out = { ...p };
+  const out = { ...DEFAULTS, ...p };
 
-  out.weeklyAmount = Math.max(0, toNum(out.weeklyAmount, 100));
-  out.years = Math.min(50, Math.max(0, toNum(out.years, 10)));
-  out.annualReturnPct = Math.min(200, Math.max(-100, toNum(out.annualReturnPct, 7)));
-  out.annualFeePct = Math.min(5, Math.max(0, toNum(out.annualFeePct, 0)));
+  out.weeklyAmount = clamp(toNum(out.weeklyAmount, DEFAULTS.weeklyAmount), LIMITS.weeklyAmount.min, LIMITS.weeklyAmount.max);
+  out.years = clamp(toNum(out.years, DEFAULTS.years), LIMITS.years.min, LIMITS.years.max);
+  out.annualReturnPct = clamp(toNum(out.annualReturnPct, DEFAULTS.annualReturnPct), LIMITS.annualReturnPct.min, LIMITS.annualReturnPct.max);
+  out.annualFeePct = clamp(toNum(out.annualFeePct, DEFAULTS.annualFeePct), LIMITS.annualFeePct.min, LIMITS.annualFeePct.max);
 
   const shockOn = out.shockPct !== null && out.shockYear !== null;
   if (!shockOn) {
     out.shockPct = null;
     out.shockYear = null;
   } else {
-    out.shockPct = Math.min(0, Math.max(-95, toNum(out.shockPct, -30)));
-    out.shockYear = Math.min(out.years, Math.max(0, toNum(out.shockYear, 3)));
+    out.shockPct = clamp(toNum(out.shockPct, -30), LIMITS.shockPct.min, LIMITS.shockPct.max);
+    out.shockYear = clamp(toNum(out.shockYear, 3), 0, out.years);
   }
 
   return out;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DCA Simulation Engine
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * @typedef {object} SimulationResult
+ * @property {object} params - The validated parameters used
+ * @property {number} contributed - Total amount contributed
+ * @property {number} finalValue - Final portfolio value
+ * @property {number} gains - Total gains (finalValue - contributed)
+ * @property {number} maxDrawdownPct - Maximum drawdown percentage
+ * @property {number|null} recoveryWeeks - Weeks to recover from shock (null if not recovered)
+ * @property {number[]} series - Weekly portfolio values for charting
+ */
+
+/**
+ * Run a DCA (Dollar Cost Averaging) simulation with optional shock event
+ * @param {object} params - Simulation parameters
+ * @param {number} params.weeklyAmount - Weekly contribution amount
+ * @param {number} params.years - Investment duration in years
+ * @param {number} params.annualReturnPct - Expected annual return percentage
+ * @param {number} params.annualFeePct - Annual management fee percentage
+ * @param {number|null} params.shockPct - Shock event percentage (negative)
+ * @param {number|null} params.shockYear - Year when shock occurs
+ * @returns {SimulationResult} Simulation results
+ */
 function simulateDCA(params) {
   const p = clampParams(params);
 
@@ -138,27 +280,41 @@ function simulateDCA(params) {
   };
 }
 
+/**
+ * Format a number as currency string
+ * @param {number} x - Number to format
+ * @returns {string} Formatted string (e.g., "1,234")
+ */
 function formatMoney(x) {
   const n = Number(x);
   if (!Number.isFinite(n)) return "0";
   return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Command Parsing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Parse /dca command text into simulation parameters
+ * Format: /dca <weekly> <years> <annual_return> [fee <annual_fee>] [shock <shock_pct> at <shock_year>]
+ * @param {string} text - Command text
+ * @returns {object} Parsed and validated parameters
+ */
 function parseDcaCommand(text) {
-  // /dca <weekly> <years> <annual_return> [fee <annual_fee>] [shock <shock_pct> at <shock_year>]
   const parts = String(text || "").trim().split(/\s+/);
 
-  let weeklyAmount = 100;
-  let years = 10;
-  let annualReturnPct = 7;
-  let annualFeePct = 0;
+  let weeklyAmount = DEFAULTS.weeklyAmount;
+  let years = DEFAULTS.years;
+  let annualReturnPct = DEFAULTS.annualReturnPct;
+  let annualFeePct = DEFAULTS.annualFeePct;
 
   let shockPct = null;
   let shockYear = null;
 
-  if (parts.length >= 2) weeklyAmount = toNum(parts[1], 100);
-  if (parts.length >= 3) years = toNum(parts[2], 10);
-  if (parts.length >= 4) annualReturnPct = toNum(parts[3], 7);
+  if (parts.length >= 2) weeklyAmount = toNum(parts[1], DEFAULTS.weeklyAmount);
+  if (parts.length >= 3) years = toNum(parts[2], DEFAULTS.years);
+  if (parts.length >= 4) annualReturnPct = toNum(parts[3], DEFAULTS.annualReturnPct);
 
   for (let i = 4; i < parts.length; i++) {
     const p = parts[i]?.toLowerCase();
@@ -185,8 +341,16 @@ function parseDcaCommand(text) {
   return clampParams({ weeklyAmount, years, annualReturnPct, annualFeePct, shockPct, shockYear });
 }
 
-// Shorter QuickChart URL (important). Apple-ish minimalist line.
-// If Telegram still blocks images, we fall back to text + link.
+// ─────────────────────────────────────────────────────────────────────────────
+// Chart Generation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Generate QuickChart URL for portfolio visualization
+ * Uses Apple-ish minimalist line chart style
+ * @param {number[]} series - Portfolio values over time
+ * @returns {string} QuickChart URL
+ */
 function quickChartUrl(series) {
   const maxPoints = 180;
   const step = Math.max(1, Math.floor(series.length / maxPoints));
@@ -228,6 +392,15 @@ function quickChartUrl(series) {
   return `https://quickchart.io/chart?c=${encoded}&w=980&h=560&backgroundColor=white`;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// UI Components
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Generate inline keyboard for parameter adjustment
+ * @param {object} p - Current parameters
+ * @returns {object} Telegraf Markup keyboard
+ */
 function keyboardFor(p) {
   const shockOn = p.shockPct !== null && p.shockYear !== null;
 
@@ -252,6 +425,11 @@ function keyboardFor(p) {
   ]);
 }
 
+/**
+ * Build HTML caption with simulation results
+ * @param {SimulationResult} sim - Simulation results
+ * @returns {string} HTML-formatted caption
+ */
 function buildCaption(sim) {
   const p = sim.params;
 
@@ -328,7 +506,10 @@ async function renderCard(ctx, userId, params) {
   }
 }
 
-// Commands
+// ─────────────────────────────────────────────────────────────────────────────
+// Bot Commands
+// ─────────────────────────────────────────────────────────────────────────────
+
 bot.start(async (ctx) => ctx.reply("DCA Shock Bot. Type /help"));
 bot.command("ping", async (ctx) => ctx.reply("pong"));
 
@@ -360,32 +541,32 @@ bot.command("dca", async (ctx) => {
   }
 });
 
-// Preset commands (still useful)
+// Preset commands
 bot.command("base", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
   if (isRateLimited(userId)) return;
-
-  await renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -30, shockYear: 3 });
+  await renderCard(ctx, userId, PRESETS.base);
 });
 
 bot.command("bull", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
   if (isRateLimited(userId)) return;
-
-  await renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 12, annualFeePct: 0, shockPct: null, shockYear: null });
+  await renderCard(ctx, userId, PRESETS.bull);
 });
 
 bot.command("pain", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
   if (isRateLimited(userId)) return;
-
-  await renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -50, shockYear: 2 });
+  await renderCard(ctx, userId, PRESETS.pain);
 });
 
-// Button actions
+// ─────────────────────────────────────────────────────────────────────────────
+// Button Actions
+// ─────────────────────────────────────────────────────────────────────────────
+
 bot.action("noop", async (ctx) => {
   try {
     await ctx.answerCbQuery("Turn shock on first");
@@ -395,17 +576,17 @@ bot.action("noop", async (ctx) => {
 bot.action("run:default", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
-  await renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -30, shockYear: 3 });
+  await renderCard(ctx, userId, PRESETS.base);
 });
 
 bot.action(/^preset:(.+)$/, async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
 
-  const which = ctx.match[1];
-  if (which === "base") return renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -30, shockYear: 3 });
-  if (which === "bull") return renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 12, annualFeePct: 0, shockPct: null, shockYear: null });
-  if (which === "pain") return renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -50, shockYear: 2 });
+  const preset = PRESETS[ctx.match[1]];
+  if (preset) {
+    return renderCard(ctx, userId, preset);
+  }
 
   try {
     await ctx.answerCbQuery();
@@ -415,7 +596,7 @@ bot.action(/^preset:(.+)$/, async (ctx) => {
 bot.action(/^years:([+-]\d+)$/, async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
-  if (isRateLimited(userId, 350)) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
 
   const cur = userState.get(userId) || clampParams({});
   const delta = Number(ctx.match[1]);
@@ -425,7 +606,7 @@ bot.action(/^years:([+-]\d+)$/, async (ctx) => {
 bot.action(/^ret:([+-]\d+)$/, async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
-  if (isRateLimited(userId, 350)) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
 
   const cur = userState.get(userId) || clampParams({});
   const delta = Number(ctx.match[1]);
@@ -435,7 +616,7 @@ bot.action(/^ret:([+-]\d+)$/, async (ctx) => {
 bot.action("shock:toggle", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
-  if (isRateLimited(userId, 350)) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
 
   const cur = userState.get(userId) || clampParams({});
   const shockOn = cur.shockPct !== null && cur.shockYear !== null;
@@ -448,7 +629,7 @@ bot.action("shock:toggle", async (ctx) => {
 bot.action(/^shockyear:([+-]\d+)$/, async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
-  if (isRateLimited(userId, 350)) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
 
   const cur = userState.get(userId);
   if (!cur || cur.shockPct === null || cur.shockYear === null) {
@@ -498,11 +679,69 @@ bot.on("text", async (ctx) => {
 
 bot.catch((err) => console.error("BOT ERROR:", err));
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Startup & Graceful Shutdown
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Gracefully shutdown the bot and clean up resources
+ * @param {string} signal - The signal that triggered shutdown
+ */
+function gracefulShutdown(signal) {
+  console.log(`\nReceived ${signal}. Shutting down gracefully...`);
+
+  // Stop the cleanup timer
+  clearInterval(cleanupTimer);
+
+  // Stop the bot
+  bot.stop(signal);
+
+  console.log("Bot stopped. Goodbye!");
+  process.exit(0);
+}
+
+// Handle shutdown signals
+process.once("SIGINT", () => gracefulShutdown("SIGINT"));
+process.once("SIGTERM", () => gracefulShutdown("SIGTERM"));
+
 async function start() {
   // Avoid polling conflicts and webhook leftovers
   await bot.telegram.deleteWebhook().catch(() => {});
   await bot.launch();
   console.log("Bot running with long polling");
+  console.log(`Cleanup interval: ${RATE_LIMIT.cleanupInterval / 1000}s | Session max age: ${RATE_LIMIT.maxAge / 1000}s`);
 }
 
-start();
+// Only start bot when running directly (not when imported for testing)
+if (!isTestMode) {
+  start();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Module Exports (for testing)
+// ─────────────────────────────────────────────────────────────────────────────
+
+module.exports = {
+  // Constants
+  PRESETS,
+  DEFAULTS,
+  LIMITS,
+  RATE_LIMIT,
+
+  // Utility functions
+  toNum,
+  clamp,
+  escHtml,
+
+  // Financial calculations
+  weeklyRateFromAnnual,
+  weeklyFeeFactorFromAnnual,
+  clampParams,
+
+  // Simulation
+  simulateDCA,
+
+  // Parsing
+  parseDcaCommand,
+  formatMoney
+};
