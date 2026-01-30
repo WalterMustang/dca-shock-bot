@@ -25,10 +25,10 @@ const PRESETS = {
 const ETF_PRESETS = {
   voo: {
     name: "VOO",
-    fullName: "S&P 500 ETF",
+    fullName: "S&P 500 ETF (Vanguard)",
     annualReturnPct: 10.5,
     annualFeePct: 0.03,
-    description: "S&P 500 index (1957-2024 avg ~10.5%)",
+    description: "Top 500 US companies (Apple, Microsoft, Amazon...). Most popular for passive investing.",
     typicalShock: -35  // 2008 crisis, 2020 COVID
   },
   qqq: {
@@ -36,31 +36,31 @@ const ETF_PRESETS = {
     fullName: "Nasdaq 100 ETF",
     annualReturnPct: 14,
     annualFeePct: 0.2,
-    description: "Nasdaq 100 tech-heavy (higher risk/reward)",
+    description: "Top 100 tech companies. Higher returns but more volatile (dot-com crash was -80%).",
     typicalShock: -50  // 2000 dot-com, 2022 tech crash
   },
   vti: {
     name: "VTI",
-    fullName: "Total US Market ETF",
+    fullName: "Total US Stock Market",
     annualReturnPct: 10,
     annualFeePct: 0.03,
-    description: "Total US stock market",
+    description: "All ~4000 US stocks (large + mid + small cap). Maximum diversification.",
     typicalShock: -35
   },
   vxus: {
     name: "VXUS",
-    fullName: "International ETF",
+    fullName: "International Stocks",
     annualReturnPct: 5,
     annualFeePct: 0.08,
-    description: "International ex-US stocks",
+    description: "Stocks outside USA (Europe, Asia, emerging markets). Diversifies away from US.",
     typicalShock: -40
   },
   bnd: {
     name: "BND",
-    fullName: "Total Bond ETF",
+    fullName: "US Bond Fund",
     annualReturnPct: 4,
     annualFeePct: 0.03,
-    description: "US bonds (lower risk/reward)",
+    description: "US government & corporate bonds. Low risk, low return. Good for stability.",
     typicalShock: -10
   },
   btc: {
@@ -68,7 +68,7 @@ const ETF_PRESETS = {
     fullName: "Bitcoin",
     annualReturnPct: 50,
     annualFeePct: 0,
-    description: "Bitcoin (extremely volatile)",
+    description: "Cryptocurrency. Extreme volatility - can 10x or drop 80%. High risk/reward.",
     typicalShock: -70
   }
 };
@@ -657,14 +657,18 @@ bot.command("etf", async (ctx) => {
     return;
   }
 
-  // Show ETF list
-  let msg = "📈 <b>ETF Presets</b> (historical avg returns)\n\n";
+  // Show ETF list with explanation
+  let msg = "📈 <b>What are ETFs?</b>\n";
+  msg += "ETFs (Exchange-Traded Funds) are baskets of stocks you can buy with one purchase. ";
+  msg += "Instead of picking individual stocks, you buy the whole market.\n\n";
+  msg += "<b>Popular ETFs for DCA investing:</b>\n\n";
   for (const [key, etf] of Object.entries(ETF_PRESETS)) {
     msg += `<b>/${key.toUpperCase()}</b> - ${etf.fullName}\n`;
-    msg += `   Return: ${etf.annualReturnPct}% | Fee: ${etf.annualFeePct}% | Crash: ${etf.typicalShock}%\n`;
-    msg += `   <i>${etf.description}</i>\n\n`;
+    msg += `📊 ${etf.annualReturnPct}% avg return | 💰 ${etf.annualFeePct}% fee | 📉 ${etf.typicalShock}% typical crash\n`;
+    msg += `<i>${etf.description}</i>\n\n`;
   }
-  msg += "Tap an ETF button or type /etf voo";
+  msg += "⚠️ <i>Past performance ≠ future results. This is for education only.</i>\n\n";
+  msg += "👆 Tap an ETF to simulate:";
 
   const kb = Markup.inlineKeyboard([
     [
