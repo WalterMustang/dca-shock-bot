@@ -352,13 +352,13 @@ function parseDcaCommand(text) {
  * @returns {string} QuickChart URL
  */
 function quickChartUrl(series) {
-  const maxPoints = 180;
+  const maxPoints = 100;
   const step = Math.max(1, Math.floor(series.length / maxPoints));
   const sampled = [];
   const labels = [];
   for (let i = 0; i < series.length; i += step) {
     sampled.push(Math.round(series[i]));
-    labels.push(i);
+    labels.push("");
   }
 
   const cfg = {
@@ -371,37 +371,30 @@ function quickChartUrl(series) {
           data: sampled,
           pointRadius: 0,
           borderWidth: 3,
-          borderColor: "rgb(0, 122, 255)",
-          backgroundColor: "rgba(0, 122, 255, 0.15)",
-          fill: true,
-          tension: 0.3
+          borderColor: "#0066CC",
+          backgroundColor: "rgba(0,102,204,0.2)",
+          fill: true
         }
       ]
     },
     options: {
-      responsive: false,
-      plugins: {
-        legend: { display: false },
-        title: {
-          display: true,
-          text: "DCA Projection",
-          font: { size: 18, weight: "600" },
-          padding: { top: 6, bottom: 10 }
-        }
+      legend: { display: false },
+      title: {
+        display: true,
+        text: "DCA Portfolio Growth"
       },
-      layout: { padding: 18 },
       scales: {
-        x: { display: false },
-        y: {
-          grid: { color: "rgba(0,0,0,0.08)" },
-          ticks: { callback: function(v) { return "$" + (v/1000).toFixed(0) + "k"; } }
-        }
+        xAxes: [{ display: false }],
+        yAxes: [{
+          ticks: { beginAtZero: true },
+          gridLines: { color: "rgba(0,0,0,0.1)" }
+        }]
       }
     }
   };
 
   const encoded = encodeURIComponent(JSON.stringify(cfg));
-  return `https://quickchart.io/chart?c=${encoded}&w=800&h=450&bkg=white`;
+  return `https://quickchart.io/chart?c=${encoded}&w=600&h=400&bkg=white`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
