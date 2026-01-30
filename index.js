@@ -355,21 +355,26 @@ function quickChartUrl(series) {
   const maxPoints = 180;
   const step = Math.max(1, Math.floor(series.length / maxPoints));
   const sampled = [];
-  for (let i = 0; i < series.length; i += step) sampled.push(Math.round(series[i]));
+  const labels = [];
+  for (let i = 0; i < series.length; i += step) {
+    sampled.push(Math.round(series[i]));
+    labels.push(i);
+  }
 
   const cfg = {
     type: "line",
     data: {
+      labels: labels,
       datasets: [
         {
           label: "Portfolio",
           data: sampled,
           pointRadius: 0,
           borderWidth: 3,
-          borderColor: "#007AFF",
-          backgroundColor: "rgba(0, 122, 255, 0.1)",
+          borderColor: "rgb(0, 122, 255)",
+          backgroundColor: "rgba(0, 122, 255, 0.15)",
           fill: true,
-          tension: 0.35
+          tension: 0.3
         }
       ]
     },
@@ -386,14 +391,17 @@ function quickChartUrl(series) {
       },
       layout: { padding: 18 },
       scales: {
-        x: { display: false, grid: { display: false } },
-        y: { grid: { color: "rgba(0,0,0,0.06)" } }
+        x: { display: false },
+        y: {
+          grid: { color: "rgba(0,0,0,0.08)" },
+          ticks: { callback: function(v) { return "$" + (v/1000).toFixed(0) + "k"; } }
+        }
       }
     }
   };
 
   const encoded = encodeURIComponent(JSON.stringify(cfg));
-  return `https://quickchart.io/chart?c=${encoded}&w=980&h=560&backgroundColor=white`;
+  return `https://quickchart.io/chart?c=${encoded}&w=800&h=450&bkg=white`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -692,14 +700,25 @@ bot.action("share", async (ctx) => {
     return;
   }
 
+  // Run simulation to get actual results
+  const sim = simulateDCA(cur);
+  const roi = sim.contributed > 0 ? ((sim.gains / sim.contributed) * 100).toFixed(1) : "0.0";
+
   const feePart = cur.annualFeePct > 0 ? ` fee ${cur.annualFeePct}` : "";
   const shockPart = cur.shockPct !== null && cur.shockYear !== null ? ` shock ${cur.shockPct} at ${cur.shockYear}` : "";
   const cmd = `/dca ${cur.weeklyAmount} ${cur.years} ${cur.annualReturnPct}${feePart}${shockPart}`;
 
+  const shockInfo = cur.shockPct !== null ? `\nShock: ${cur.shockPct}% at year ${cur.shockYear}` : "";
+  const recoveryInfo = cur.shockPct !== null && sim.recoveryWeeks !== null ? ` (recovered in ${sim.recoveryWeeks} weeks)` : "";
+
   await ctx.reply(
-    `Share:\nI ran $${formatMoney(cur.weeklyAmount)}/week for ${cur.years}y at ${cur.annualReturnPct}%` +
-      (shockPart ? ` with a ${cur.shockPct}% shock in year ${cur.shockYear}` : "") +
-      `.\n\nCommand:\n${cmd}`
+    `📊 DCA Simulation Results\n\n` +
+    `$${formatMoney(cur.weeklyAmount)}/week for ${cur.years} years at ${cur.annualReturnPct}%${shockInfo}${recoveryInfo}\n\n` +
+    `💰 Contributed: $${formatMoney(sim.contributed)}\n` +
+    `📈 Final Value: $${formatMoney(sim.finalValue)}\n` +
+    `✅ Gains: $${formatMoney(sim.gains)} (${roi}% ROI)\n` +
+    `📉 Max Drawdown: ${sim.maxDrawdownPct.toFixed(1)}%\n\n` +
+    `Command:\n${cmd}`
   );
 
   try {
