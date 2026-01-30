@@ -70,10 +70,26 @@ docker run -e BOT_TOKEN="your-token" dca-shock-bot
 | `/start` | Welcome message |
 | `/help` | Show usage examples and preset buttons |
 | `/dca <weekly> <years> <return> [options]` | Run custom simulation |
+| `/etf` | Show all ETF presets with historical returns |
 | `/base` | Preset: $100/wk, 10yr, 7%, -30% shock at year 3 |
 | `/bull` | Preset: $100/wk, 10yr, 12%, no shock |
 | `/pain` | Preset: $100/wk, 10yr, 7%, -50% shock at year 2 |
 | `/ping` | Health check |
+
+### ETF Presets
+
+Quick commands to simulate popular ETFs with their historical average returns:
+
+| Command | ETF | Avg Return | Fee | Typical Crash |
+|---------|-----|------------|-----|---------------|
+| `/voo` | S&P 500 (VOO) | 10.5% | 0.03% | -35% |
+| `/qqq` | Nasdaq 100 (QQQ) | 14% | 0.20% | -50% |
+| `/vti` | Total US Market | 10% | 0.03% | -35% |
+| `/vxus` | International | 5% | 0.08% | -40% |
+| `/bnd` | US Bonds | 4% | 0.03% | -10% |
+| `/btc` | Bitcoin | 50% | 0% | -70% |
+
+*Returns based on long-term historical averages. Past performance does not guarantee future results.*
 
 ### Command Syntax
 
@@ -102,13 +118,13 @@ docker run -e BOT_TOKEN="your-token" dca-shock-bot
 | Button | Action |
 |--------|--------|
 | `$-50/wk` / `$+50/wk` | Adjust weekly contribution |
-| `Years -1` / `Years +1` | Adjust investment duration |
-| `Return -2%` / `Return +2%` | Adjust expected annual return |
+| `Yrs -1` / `Yrs +1` | Adjust investment duration |
+| `-2%` / `+2%` | Adjust expected annual return |
 | `Shock %` | Toggle shock on/off (shows current %) |
 | `Worse` | Increase shock severity by 10% |
-| `Yr -1` / `Yr +1` | Adjust shock timing |
+| `VOO` / `QQQ` / `VTI` / `BTC` | Load ETF preset with historical returns |
 | `Base` / `Bull` / `Pain` | Load preset scenarios |
-| `Share` | Export current settings as command |
+| `Share` | Export full results with command |
 
 ## Configuration
 

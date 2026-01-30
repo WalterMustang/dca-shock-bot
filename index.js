@@ -21,6 +21,58 @@ const PRESETS = {
   pain: { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -50, shockYear: 2 }
 };
 
+// ETF presets with historical average returns (based on long-term data)
+const ETF_PRESETS = {
+  voo: {
+    name: "VOO",
+    fullName: "S&P 500 ETF (Vanguard)",
+    annualReturnPct: 10.5,
+    annualFeePct: 0.03,
+    description: "Top 500 US companies (Apple, Microsoft, Amazon...). Most popular for passive investing.",
+    typicalShock: -35  // 2008 crisis, 2020 COVID
+  },
+  qqq: {
+    name: "QQQ",
+    fullName: "Nasdaq 100 ETF",
+    annualReturnPct: 14,
+    annualFeePct: 0.2,
+    description: "Top 100 tech companies. Higher returns but more volatile (dot-com crash was -80%).",
+    typicalShock: -50  // 2000 dot-com, 2022 tech crash
+  },
+  vti: {
+    name: "VTI",
+    fullName: "Total US Stock Market",
+    annualReturnPct: 10,
+    annualFeePct: 0.03,
+    description: "All ~4000 US stocks (large + mid + small cap). Maximum diversification.",
+    typicalShock: -35
+  },
+  vxus: {
+    name: "VXUS",
+    fullName: "International Stocks",
+    annualReturnPct: 5,
+    annualFeePct: 0.08,
+    description: "Stocks outside USA (Europe, Asia, emerging markets). Diversifies away from US.",
+    typicalShock: -40
+  },
+  bnd: {
+    name: "BND",
+    fullName: "US Bond Fund",
+    annualReturnPct: 4,
+    annualFeePct: 0.03,
+    description: "US government & corporate bonds. Low risk, low return. Good for stability.",
+    typicalShock: -10
+  },
+  btc: {
+    name: "BTC",
+    fullName: "Bitcoin",
+    annualReturnPct: 50,
+    annualFeePct: 0,
+    description: "Cryptocurrency. Extreme volatility - can 10x or drop 80%. High risk/reward.",
+    typicalShock: -70
+  }
+};
+
 const DEFAULTS = {
   weeklyAmount: 100,
   years: 10,
@@ -413,22 +465,24 @@ function keyboardFor(p) {
     [
       Markup.button.callback("$-50/wk", "amt:-50"),
       Markup.button.callback("$+50/wk", "amt:+50"),
-      Markup.button.callback("Years -1", "years:-1"),
-      Markup.button.callback("Years +1", "years:+1")
+      Markup.button.callback("Yrs -1", "years:-1"),
+      Markup.button.callback("Yrs +1", "years:+1")
     ],
     [
-      Markup.button.callback("Return -2%", "ret:-2"),
-      Markup.button.callback("Return +2%", "ret:+2"),
+      Markup.button.callback("-2%", "ret:-2"),
+      Markup.button.callback("+2%", "ret:+2"),
       Markup.button.callback(shockOn ? `${p.shockPct}%` : "Shock", "shock:toggle"),
       Markup.button.callback(shockOn ? "Worse" : "--", shockOn ? "shockpct:-10" : "noop")
     ],
     [
-      Markup.button.callback("Yr -1", shockOn ? "shockyear:-1" : "noop"),
-      Markup.button.callback("Yr +1", shockOn ? "shockyear:+1" : "noop"),
-      Markup.button.callback("Base", "preset:base"),
-      Markup.button.callback("Bull", "preset:bull")
+      Markup.button.callback("VOO", "etf:voo"),
+      Markup.button.callback("QQQ", "etf:qqq"),
+      Markup.button.callback("VTI", "etf:vti"),
+      Markup.button.callback("BTC", "etf:btc")
     ],
     [
+      Markup.button.callback("Base", "preset:base"),
+      Markup.button.callback("Bull", "preset:bull"),
       Markup.button.callback("Pain", "preset:pain"),
       Markup.button.callback("Share", "share")
     ]
@@ -528,16 +582,20 @@ bot.command("ping", async (ctx) => ctx.reply("pong"));
 
 bot.command("help", async (ctx) => {
   const msg =
-    "Try:\n" +
-    "/dca 100 10 8\n" +
+    "📊 <b>DCA Shock Bot</b>\n\n" +
+    "<b>Commands:</b>\n" +
+    "/dca 100 10 8 - $100/wk, 10yrs, 8%\n" +
     "/dca 100 10 8 shock -30 at 3\n" +
-    "/dca 100 10 8 fee 0.2 shock -30 at 3\n\n" +
-    "Or tap presets below.";
+    "/etf - Show ETF presets\n" +
+    "/voo /qqq /vti /btc - Quick ETF sim\n\n" +
+    "<b>ETFs (historical avg):</b>\n" +
+    "VOO 10.5% | QQQ 14% | VTI 10%\n" +
+    "VXUS 5% | BND 4% | BTC 50%";
   const kb = Markup.inlineKeyboard([
-    [Markup.button.callback("Base", "preset:base"), Markup.button.callback("Bull", "preset:bull"), Markup.button.callback("Pain", "preset:pain")],
-    [Markup.button.callback("Run default", "run:default")]
+    [Markup.button.callback("VOO", "etf:voo"), Markup.button.callback("QQQ", "etf:qqq"), Markup.button.callback("BTC", "etf:btc")],
+    [Markup.button.callback("Base", "preset:base"), Markup.button.callback("Bull", "preset:bull"), Markup.button.callback("Pain", "preset:pain")]
   ]);
-  await ctx.reply(msg, kb);
+  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
 });
 
 bot.command("dca", async (ctx) => {
@@ -576,6 +634,77 @@ bot.command("pain", async (ctx) => {
   await renderCard(ctx, userId, PRESETS.pain);
 });
 
+// ETF commands - show list or simulate specific ETF
+bot.command("etf", async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  if (isRateLimited(userId)) return;
+
+  const args = (ctx.message?.text || "").trim().split(/\s+/);
+  const etfName = args[1]?.toLowerCase();
+
+  // If specific ETF requested
+  if (etfName && ETF_PRESETS[etfName]) {
+    const etf = ETF_PRESETS[etfName];
+    const cur = userState.get(userId) || clampParams({});
+    await renderCard(ctx, userId, {
+      ...cur,
+      annualReturnPct: etf.annualReturnPct,
+      annualFeePct: etf.annualFeePct,
+      shockPct: etf.typicalShock,
+      shockYear: Math.min(cur.years || 10, 3)
+    });
+    return;
+  }
+
+  // Show ETF list with explanation
+  let msg = "📈 <b>What are ETFs?</b>\n";
+  msg += "ETFs (Exchange-Traded Funds) are baskets of stocks you can buy with one purchase. ";
+  msg += "Instead of picking individual stocks, you buy the whole market.\n\n";
+  msg += "<b>Popular ETFs for DCA investing:</b>\n\n";
+  for (const [key, etf] of Object.entries(ETF_PRESETS)) {
+    msg += `<b>/${key.toUpperCase()}</b> - ${etf.fullName}\n`;
+    msg += `📊 ${etf.annualReturnPct}% avg return | 💰 ${etf.annualFeePct}% fee | 📉 ${etf.typicalShock}% typical crash\n`;
+    msg += `<i>${etf.description}</i>\n\n`;
+  }
+  msg += "⚠️ <i>Past performance ≠ future results. This is for education only.</i>\n\n";
+  msg += "👆 Tap an ETF to simulate:";
+
+  const kb = Markup.inlineKeyboard([
+    [
+      Markup.button.callback("VOO", "etf:voo"),
+      Markup.button.callback("QQQ", "etf:qqq"),
+      Markup.button.callback("VTI", "etf:vti")
+    ],
+    [
+      Markup.button.callback("VXUS", "etf:vxus"),
+      Markup.button.callback("BND", "etf:bnd"),
+      Markup.button.callback("BTC", "etf:btc")
+    ]
+  ]);
+
+  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+});
+
+// Individual ETF commands
+for (const etfKey of Object.keys(ETF_PRESETS)) {
+  bot.command(etfKey, async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId) return;
+    if (isRateLimited(userId)) return;
+
+    const etf = ETF_PRESETS[etfKey];
+    const cur = userState.get(userId) || clampParams({});
+    await renderCard(ctx, userId, {
+      ...cur,
+      annualReturnPct: etf.annualReturnPct,
+      annualFeePct: etf.annualFeePct,
+      shockPct: etf.typicalShock,
+      shockYear: Math.min(cur.years || 10, 3)
+    });
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Button Actions
 // ─────────────────────────────────────────────────────────────────────────────
@@ -604,6 +733,28 @@ bot.action(/^preset:(.+)$/, async (ctx) => {
   try {
     await ctx.answerCbQuery();
   } catch {}
+});
+
+bot.action(/^etf:(.+)$/, async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
+
+  const etfKey = ctx.match[1];
+  const etf = ETF_PRESETS[etfKey];
+  if (!etf) {
+    try { await ctx.answerCbQuery("Unknown ETF"); } catch {}
+    return;
+  }
+
+  const cur = userState.get(userId) || clampParams({});
+  await renderCard(ctx, userId, {
+    ...cur,
+    annualReturnPct: etf.annualReturnPct,
+    annualFeePct: etf.annualFeePct,
+    shockPct: etf.typicalShock,
+    shockYear: Math.min(cur.years || 10, 3)
+  });
 });
 
 bot.action(/^years:([+-]\d+)$/, async (ctx) => {
