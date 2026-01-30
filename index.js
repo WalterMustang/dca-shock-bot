@@ -1,3 +1,4 @@
+// index.js
 import { Telegraf, Markup } from "telegraf";
 
 const token = process.env.BOT_TOKEN;
@@ -5,25 +6,32 @@ if (!token) throw new Error("Missing BOT_TOKEN env var");
 
 const bot = new Telegraf(token);
 
-// In memory per user state
+// Optional: comment out if you do not want logs
+bot.use(async (ctx, next) => {
+  const txt = ctx.message?.text;
+  if (txt) console.log("IN:", txt);
+  return next();
+});
+
+// In-memory state per user (no database)
 const userState = new Map();
 
-// Simple per user rate limit
+// Simple per-user rate limit (button spam protection)
 const lastCall = new Map();
-function rateLimited(userId) {
+function isRateLimited(userId, ms = 900) {
   const now = Date.now();
   const last = lastCall.get(userId) || 0;
-  if (now - last < 1200) return true;
+  if (now - last < ms) return true;
   lastCall.set(userId, now);
   return false;
 }
 
 // MarkdownV2 escape for captions
-function esc(s) {
+function escMdV2(s) {
   return String(s).replace(/[_*[\]()~`>#+=|{}.!-]/g, "\\$&");
 }
 
-function toNum(x, fallback = null) {
+function toNum(x, fallback) {
   const n = Number(x);
   return Number.isFinite(n) ? n : fallback;
 }
@@ -41,17 +49,32 @@ function weeklyFeeFactorFromAnnual(feePct) {
   return Math.pow(1 - f, 1 / 52);
 }
 
-function simulateDCA({
-  weeklyAmount,
-  years,
-  annualReturnPct,
-  annualFeePct,
-  shockPct,
-  shockYear
-}) {
-  const weeks = Math.max(0, Math.floor(years * 52));
-  const rWeek = weeklyRateFromAnnual(annualReturnPct);
-  const feeFactor = weeklyFeeFactorFromAnnual(annualFeePct);
+function clampParams(p) {
+  const out = { ...p };
+
+  out.weeklyAmount = Math.max(0, toNum(out.weeklyAmount, 100));
+  out.years = Math.min(50, Math.max(0, toNum(out.years, 10)));
+  out.annualReturnPct = Math.min(200, Math.max(-100, toNum(out.annualReturnPct, 7)));
+  out.annualFeePct = Math.min(5, Math.max(0, toNum(out.annualFeePct, 0)));
+
+  const shockOn = out.shockPct !== null && out.shockYear !== null;
+  if (!shockOn) {
+    out.shockPct = null;
+    out.shockYear = null;
+  } else {
+    out.shockPct = Math.min(0, Math.max(-95, toNum(out.shockPct, -30)));
+    out.shockYear = Math.min(out.years, Math.max(0, toNum(out.shockYear, 3)));
+  }
+
+  return out;
+}
+
+function simulateDCA(params) {
+  const p = clampParams(params);
+
+  const weeks = Math.max(0, Math.floor(p.years * 52));
+  const rWeek = weeklyRateFromAnnual(p.annualReturnPct);
+  const feeFactor = weeklyFeeFactorFromAnnual(p.annualFeePct);
 
   let portfolio = 0;
   let contributed = 0;
@@ -62,9 +85,8 @@ function simulateDCA({
   const series = [];
 
   let shockWeek = null;
-  if (shockPct !== null && shockYear !== null) {
-    const sYear = Math.max(0, Math.floor(shockYear));
-    shockWeek = Math.min(weeks, Math.max(1, sYear * 52));
+  if (p.shockPct !== null && p.shockYear !== null) {
+    shockWeek = Math.min(weeks, Math.max(1, Math.floor(p.shockYear) * 52));
   }
 
   let preShockPeak = null;
@@ -73,15 +95,15 @@ function simulateDCA({
   let afterShockCounter = 0;
 
   for (let w = 1; w <= weeks; w++) {
-    portfolio += weeklyAmount;
-    contributed += weeklyAmount;
+    portfolio += p.weeklyAmount;
+    contributed += p.weeklyAmount;
 
-    portfolio *= (1 + rWeek);
+    portfolio *= 1 + rWeek;
     portfolio *= feeFactor;
 
     if (shockWeek !== null && w === shockWeek) {
       preShockPeak = peak > 0 ? peak : portfolio;
-      portfolio *= (1 + shockPct / 100);
+      portfolio *= 1 + p.shockPct / 100;
       shockApplied = true;
       afterShockCounter = 0;
     }
@@ -102,8 +124,9 @@ function simulateDCA({
   }
 
   return {
-    finalValue: portfolio,
+    params: p,
     contributed,
+    finalValue: portfolio,
     gains: portfolio - contributed,
     maxDrawdownPct: maxDrawdown * 100,
     recoveryWeeks,
@@ -117,27 +140,50 @@ function formatMoney(x) {
   return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
 
-function clampParams(p) {
-  const out = { ...p };
+function parseDcaCommand(text) {
+  // /dca <weekly> <years> <annual_return> [fee <annual_fee>] [shock <shock_pct> at <shock_year>]
+  const parts = String(text || "").trim().split(/\s+/);
 
-  out.weeklyAmount = Math.max(0, out.weeklyAmount ?? 100);
-  out.years = Math.min(50, Math.max(0, out.years ?? 10));
-  out.annualReturnPct = Math.min(200, Math.max(-100, out.annualReturnPct ?? 7));
-  out.annualFeePct = Math.min(5, Math.max(0, out.annualFeePct ?? 0));
+  let weeklyAmount = 100;
+  let years = 10;
+  let annualReturnPct = 7;
+  let annualFeePct = 0;
 
-  if (out.shockPct === null || out.shockYear === null) {
-    out.shockPct = null;
-    out.shockYear = null;
-  } else {
-    out.shockPct = Math.min(0, Math.max(-95, out.shockPct));
-    out.shockYear = Math.min(out.years, Math.max(0, out.shockYear));
+  let shockPct = null;
+  let shockYear = null;
+
+  if (parts.length >= 2) weeklyAmount = toNum(parts[1], 100);
+  if (parts.length >= 3) years = toNum(parts[2], 10);
+  if (parts.length >= 4) annualReturnPct = toNum(parts[3], 7);
+
+  for (let i = 4; i < parts.length; i++) {
+    const p = parts[i]?.toLowerCase();
+
+    if (p === "fee" && i + 1 < parts.length) {
+      annualFeePct = toNum(parts[i + 1], 0);
+      i += 1;
+      continue;
+    }
+
+    if (p === "shock" && i + 3 < parts.length) {
+      const sPct = toNum(parts[i + 1], null);
+      const at = parts[i + 2]?.toLowerCase();
+      const sYear = toNum(parts[i + 3], null);
+
+      if (sPct !== null && at === "at" && sYear !== null) {
+        shockPct = sPct;
+        shockYear = sYear;
+        i += 3;
+        continue;
+      }
+    }
   }
 
-  return out;
+  return clampParams({ weeklyAmount, years, annualReturnPct, annualFeePct, shockPct, shockYear });
 }
 
-// Apple-ish chart config
-function quickChartUrl(series) {
+function makeAppleishQuickChartUrl(series) {
+  // Sample to keep URL size reasonable
   const maxPoints = 260;
   const step = Math.max(1, Math.floor(series.length / maxPoints));
   const sampled = [];
@@ -150,9 +196,8 @@ function quickChartUrl(series) {
       datasets: [
         {
           data: sampled,
-          fill: false,
-          borderWidth: 3,
           pointRadius: 0,
+          borderWidth: 3,
           tension: 0.35
         }
       ]
@@ -164,8 +209,8 @@ function quickChartUrl(series) {
         title: {
           display: true,
           text: "DCA Projection",
-          font: { size: 18, weight: "600", family: "Helvetica, Arial, sans-serif" },
-          padding: { top: 8, bottom: 12 }
+          font: { size: 18, weight: "600" },
+          padding: { top: 6, bottom: 10 }
         }
       },
       layout: { padding: 18 },
@@ -188,30 +233,35 @@ function quickChartUrl(series) {
   return `https://quickchart.io/chart?c=${encoded}&w=980&h=560&backgroundColor=white`;
 }
 
-function buildCaption(params, result) {
+function buildCaption(sim) {
+  const p = sim.params;
   const lines = [];
-  lines.push(`*${esc("DCA Shock Bot")}*`);
-  lines.push(`${esc(`Weekly: $${formatMoney(params.weeklyAmount)} | Years: ${params.years} | Return: ${params.annualReturnPct}%`)}`);
-  if (params.annualFeePct > 0) lines.push(`${esc(`Fee: ${params.annualFeePct}% / year`)}`);
 
-  if (params.shockPct !== null && params.shockYear !== null) {
-    const rec = result.recoveryWeeks === null ? "not reached" : `${result.recoveryWeeks} weeks`;
-    lines.push(`${esc(`Shock: ${params.shockPct}% at year ${params.shockYear} | Recovery: ${rec}`)}`);
-  } else {
-    lines.push(`${esc("Shock: off")}`);
-  }
+  lines.push(`*${escMdV2("DCA Shock Bot")}*`);
+  lines.push(escMdV2(`Weekly: $${formatMoney(p.weeklyAmount)} | Years: ${p.years} | Return: ${p.annualReturnPct}%`));
+
+  const meta = [];
+  if (p.annualFeePct > 0) meta.push(`Fee: ${p.annualFeePct}%`);
+  if (p.shockPct !== null && p.shockYear !== null) meta.push(`Shock: ${p.shockPct}% @ year ${p.shockYear}`);
+  if (meta.length === 0) meta.push("Shock: off");
+  lines.push(escMdV2(meta.join(" | ")));
 
   lines.push("");
-  lines.push(`${esc(`Contributed: $${formatMoney(result.contributed)}`)}`);
-  lines.push(`${esc(`Final: $${formatMoney(result.finalValue)}`)}`);
-  lines.push(`${esc(`Gains: $${formatMoney(result.gains)}`)}`);
-  lines.push(`${esc(`Max drawdown: ${result.maxDrawdownPct.toFixed(1)}%`)}`);
+  lines.push(escMdV2(`Contributed: $${formatMoney(sim.contributed)}`));
+  lines.push(escMdV2(`Final: $${formatMoney(sim.finalValue)}`));
+  lines.push(escMdV2(`Gains: $${formatMoney(sim.gains)}`));
+  lines.push(escMdV2(`Max drawdown: ${sim.maxDrawdownPct.toFixed(1)}%`));
+
+  if (p.shockPct !== null && p.shockYear !== null) {
+    const rec = sim.recoveryWeeks === null ? "not reached" : `${sim.recoveryWeeks} weeks`;
+    lines.push(escMdV2(`Recovery: ${rec}`));
+  }
 
   return lines.join("\n");
 }
 
-function buildKeyboard(params) {
-  const shockOn = params.shockPct !== null && params.shockYear !== null;
+function keyboardFor(p) {
+  const shockOn = p.shockPct !== null && p.shockYear !== null;
 
   const rows = [
     [
@@ -221,9 +271,9 @@ function buildKeyboard(params) {
       Markup.button.callback("Return +2%", "ret:+2")
     ],
     [
-      Markup.button.callback(shockOn ? "Shock: ON" : "Shock: OFF", "shock:toggle"),
-      Markup.button.callback("Shock year -1", "shockyear:-1"),
-      Markup.button.callback("Shock year +1", "shockyear:+1")
+      Markup.button.callback(shockOn ? "Shock ON" : "Shock OFF", "shock:toggle"),
+      Markup.button.callback("Shock year -1", shockOn ? "shockyear:-1" : "noop"),
+      Markup.button.callback("Shock year +1", shockOn ? "shockyear:+1" : "noop")
     ],
     [
       Markup.button.callback("Base", "preset:base"),
@@ -233,121 +283,144 @@ function buildKeyboard(params) {
     ]
   ];
 
-  // If shock is off, disable shock year buttons visually by replacing callback with noop
-  if (!shockOn) {
-    rows[1][1] = Markup.button.callback("Shock year -1", "noop");
-    rows[1][2] = Markup.button.callback("Shock year +1", "noop");
-  }
-
   return Markup.inlineKeyboard(rows);
 }
 
-async function render(ctx, userId, params) {
-  const safe = clampParams(params);
-  userState.set(userId, safe);
+async function renderCard(ctx, userId, params) {
+  const p = clampParams(params);
+  userState.set(userId, p);
 
-  const result = simulateDCA(safe);
-  const caption = buildCaption(safe, result);
-  const chart = quickChartUrl(result.series);
-  const keyboard = buildKeyboard(safe);
+  const sim = simulateDCA(p);
+  const chartUrl = makeAppleishQuickChartUrl(sim.series);
+  const caption = buildCaption(sim);
+  const kb = keyboardFor(p);
 
-  // If this is a callback, edit in place. Otherwise send new.
+  // One photo message with caption + buttons
   if (ctx.updateType === "callback_query") {
     try {
       await ctx.editMessageMedia(
-        { type: "photo", media: chart, caption, parse_mode: "MarkdownV2" },
-        { reply_markup: keyboard.reply_markup }
+        { type: "photo", media: chartUrl, caption, parse_mode: "MarkdownV2" },
+        { reply_markup: kb.reply_markup }
       );
-    } catch {
-      // Fallback: if edit fails (message too old etc), send a new one
-      await ctx.replyWithPhoto(chart, { caption, parse_mode: "MarkdownV2", ...keyboard });
+    } catch (e) {
+      // If edit fails (message too old etc), send a new one
+      await ctx.replyWithPhoto(chartUrl, {
+        caption,
+        parse_mode: "MarkdownV2",
+        reply_markup: kb.reply_markup
+      });
     }
-    await ctx.answerCbQuery();
-  } else {
-    await ctx.replyWithPhoto(chart, { caption, parse_mode: "MarkdownV2", ...keyboard });
-  }
-}
-
-function parseDca(text) {
-  const parts = text.trim().split(/\s+/);
-
-  let weeklyAmount = 100;
-  let years = 10;
-  let annualReturnPct = 7;
-  let annualFeePct = 0;
-  let shockPct = null;
-  let shockYear = null;
-
-  if (parts.length >= 2) weeklyAmount = toNum(parts[1], 100);
-  if (parts.length >= 3) years = toNum(parts[2], 10);
-  if (parts.length >= 4) annualReturnPct = toNum(parts[3], 7);
-
-  for (let i = 4; i < parts.length; i++) {
-    const p = parts[i]?.toLowerCase();
-    if (p === "fee" && i + 1 < parts.length) {
-      annualFeePct = toNum(parts[i + 1], 0);
-      i += 1;
-      continue;
-    }
-    if (p === "shock" && i + 3 < parts.length) {
-      const sPct = toNum(parts[i + 1], null);
-      const at = parts[i + 2]?.toLowerCase();
-      const sYear = toNum(parts[i + 3], null);
-      if (sPct !== null && at === "at" && sYear !== null) {
-        shockPct = sPct;
-        shockYear = sYear;
-        i += 3;
-      }
-    }
+    try {
+      await ctx.answerCbQuery();
+    } catch {}
+    return;
   }
 
-  return { weeklyAmount, years, annualReturnPct, annualFeePct, shockPct, shockYear };
+  await ctx.replyWithPhoto(chartUrl, {
+    caption,
+    parse_mode: "MarkdownV2",
+    reply_markup: kb.reply_markup
+  });
 }
 
 // Commands
+bot.start(async (ctx) => {
+  const msg =
+    "DCA Shock Bot\n\n" +
+    "Try /dca 100 10 8\n" +
+    "Or type /help\n\n" +
+    "Presets: /base /bull /pain";
+  await ctx.reply(msg);
+});
+
 bot.command("help", async (ctx) => {
   const msg =
-    "Try:\n" +
+    "Usage:\n" +
+    "/dca <weekly> <years> <annual_return> [fee <annual_fee>] [shock <shock_pct> at <shock_year>]\n\n" +
+    "Examples:\n" +
     "/dca 100 10 8\n" +
     "/dca 100 10 8 shock -30 at 3\n" +
     "/dca 100 10 8 fee 0.2 shock -30 at 3\n\n" +
-    "Or tap presets: /base /bull /pain";
-  await ctx.reply(msg);
+    "Tap presets below or run a command.";
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.callback("Base", "preset:base"), Markup.button.callback("Bull", "preset:bull"), Markup.button.callback("Pain", "preset:pain")],
+    [Markup.button.callback("Run default", "run:default")]
+  ]);
+  await ctx.reply(msg, kb);
 });
 
 bot.command("dca", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
-  if (rateLimited(userId)) return;
+  if (isRateLimited(userId)) return;
 
-  const params = parseDca(ctx.message?.text || "/dca");
-  await render(ctx, userId, params);
+  const params = parseDcaCommand(ctx.message?.text || "/dca");
+  await renderCard(ctx, userId, params);
 });
 
 bot.command("base", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
-  if (rateLimited(userId)) return;
-  await render(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -30, shockYear: 3 });
+  if (isRateLimited(userId)) return;
+
+  await renderCard(ctx, userId, {
+    weeklyAmount: 100,
+    years: 10,
+    annualReturnPct: 7,
+    annualFeePct: 0,
+    shockPct: -30,
+    shockYear: 3
+  });
 });
 
 bot.command("bull", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
-  if (rateLimited(userId)) return;
-  await render(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 12, annualFeePct: 0, shockPct: null, shockYear: null });
+  if (isRateLimited(userId)) return;
+
+  await renderCard(ctx, userId, {
+    weeklyAmount: 100,
+    years: 10,
+    annualReturnPct: 12,
+    annualFeePct: 0,
+    shockPct: null,
+    shockYear: null
+  });
 });
 
 bot.command("pain", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
-  if (rateLimited(userId)) return;
-  await render(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -50, shockYear: 2 });
+  if (isRateLimited(userId)) return;
+
+  await renderCard(ctx, userId, {
+    weeklyAmount: 100,
+    years: 10,
+    annualReturnPct: 7,
+    annualFeePct: 0,
+    shockPct: -50,
+    shockYear: 2
+  });
 });
 
-// Button handlers
+// Button actions
 bot.action("noop", async (ctx) => {
-  await ctx.answerCbQuery("Turn shock on first");
+  try {
+    await ctx.answerCbQuery("Turn shock on first");
+  } catch {}
+});
+
+bot.action("run:default", async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  await renderCard(ctx, userId, {
+    weeklyAmount: 100,
+    years: 10,
+    annualReturnPct: 7,
+    annualFeePct: 0,
+    shockPct: -30,
+    shockYear: 3
+  });
 });
 
 bot.action(/^preset:(.+)$/, async (ctx) => {
@@ -355,57 +428,70 @@ bot.action(/^preset:(.+)$/, async (ctx) => {
   if (!userId) return;
 
   const which = ctx.match[1];
-  if (which === "base") return render(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -30, shockYear: 3 });
-  if (which === "bull") return render(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 12, annualFeePct: 0, shockPct: null, shockYear: null });
-  if (which === "pain") return render(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -50, shockYear: 2 });
-
-  await ctx.answerCbQuery();
+  if (which === "base") {
+    return renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -30, shockYear: 3 });
+  }
+  if (which === "bull") {
+    return renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 12, annualFeePct: 0, shockPct: null, shockYear: null });
+  }
+  if (which === "pain") {
+    return renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -50, shockYear: 2 });
+  }
+  try {
+    await ctx.answerCbQuery();
+  } catch {}
 });
 
 bot.action(/^years:([+-]\d+)$/, async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  if (isRateLimited(userId, 350)) return;
 
-  const cur = userState.get(userId) || { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: null, shockYear: null };
+  const cur = userState.get(userId) || clampParams({});
   const delta = Number(ctx.match[1]);
-  await render(ctx, userId, { ...cur, years: (cur.years || 0) + delta });
+  await renderCard(ctx, userId, { ...cur, years: (cur.years || 0) + delta });
 });
 
 bot.action(/^ret:([+-]\d+)$/, async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  if (isRateLimited(userId, 350)) return;
 
-  const cur = userState.get(userId) || { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: null, shockYear: null };
+  const cur = userState.get(userId) || clampParams({});
   const delta = Number(ctx.match[1]);
-  await render(ctx, userId, { ...cur, annualReturnPct: (cur.annualReturnPct || 0) + delta });
+  await renderCard(ctx, userId, { ...cur, annualReturnPct: (cur.annualReturnPct || 0) + delta });
 });
 
 bot.action("shock:toggle", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  if (isRateLimited(userId, 350)) return;
 
-  const cur = userState.get(userId) || { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: null, shockYear: null };
-
+  const cur = userState.get(userId) || clampParams({});
   const shockOn = cur.shockPct !== null && cur.shockYear !== null;
+
   if (shockOn) {
-    await render(ctx, userId, { ...cur, shockPct: null, shockYear: null });
+    await renderCard(ctx, userId, { ...cur, shockPct: null, shockYear: null });
   } else {
-    // default shock
-    await render(ctx, userId, { ...cur, shockPct: -30, shockYear: Math.min(cur.years || 10, 3) });
+    await renderCard(ctx, userId, { ...cur, shockPct: -30, shockYear: Math.min(cur.years || 10, 3) });
   }
 });
 
 bot.action(/^shockyear:([+-]\d+)$/, async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  if (isRateLimited(userId, 350)) return;
 
   const cur = userState.get(userId);
   if (!cur || cur.shockPct === null || cur.shockYear === null) {
-    await ctx.answerCbQuery("Turn shock on first");
+    try {
+      await ctx.answerCbQuery("Turn shock on first");
+    } catch {}
     return;
   }
+
   const delta = Number(ctx.match[1]);
-  await render(ctx, userId, { ...cur, shockYear: (cur.shockYear || 0) + delta });
+  await renderCard(ctx, userId, { ...cur, shockYear: (cur.shockYear || 0) + delta });
 });
 
 bot.action("share", async (ctx) => {
@@ -414,21 +500,31 @@ bot.action("share", async (ctx) => {
 
   const cur = userState.get(userId);
   if (!cur) {
-    await ctx.answerCbQuery("Run a sim first");
+    try {
+      await ctx.answerCbQuery("Run a sim first");
+    } catch {}
     return;
   }
 
-  const shockPart = cur.shockPct !== null && cur.shockYear !== null ? ` shock ${cur.shockPct} at ${cur.shockYear}` : "";
   const feePart = cur.annualFeePct > 0 ? ` fee ${cur.annualFeePct}` : "";
+  const shockPart = cur.shockPct !== null && cur.shockYear !== null ? ` shock ${cur.shockPct} at ${cur.shockYear}` : "";
   const cmd = `/dca ${cur.weeklyAmount} ${cur.years} ${cur.annualReturnPct}${feePart}${shockPart}`;
 
-  await ctx.reply(
-    `Share text:\n` +
-    `I ran $${formatMoney(cur.weeklyAmount)}/week for ${cur.years}y at ${cur.annualReturnPct}%${shockPart ? ` with a ${cur.shockPct}% shock in year ${cur.shockYear}` : ""}.\n` +
-    `Command:\n${cmd}`
-  );
+  const line =
+    `I ran $${formatMoney(cur.weeklyAmount)}/week for ${cur.years}y at ${cur.annualReturnPct}%` +
+    (shockPart ? ` with a ${cur.shockPct}% shock in year ${cur.shockYear}` : "") +
+    ".";
 
-  await ctx.answerCbQuery();
+  await ctx.reply(`${line}\n\nCommand:\n${cmd}`);
+
+  try {
+    await ctx.answerCbQuery();
+  } catch {}
+});
+
+// Catch errors so the bot does not silently die
+bot.catch((err) => {
+  console.error("BOT ERROR:", err);
 });
 
 bot.launch();
