@@ -362,9 +362,13 @@ function quickChartUrl(series) {
     data: {
       datasets: [
         {
+          label: "Portfolio",
           data: sampled,
           pointRadius: 0,
           borderWidth: 3,
+          borderColor: "#007AFF",
+          backgroundColor: "rgba(0, 122, 255, 0.1)",
+          fill: true,
           tension: 0.35
         }
       ]
@@ -406,19 +410,24 @@ function keyboardFor(p) {
 
   return Markup.inlineKeyboard([
     [
+      Markup.button.callback("$-50/wk", "amt:-50"),
+      Markup.button.callback("$+50/wk", "amt:+50"),
       Markup.button.callback("Years -1", "years:-1"),
-      Markup.button.callback("Years +1", "years:+1"),
+      Markup.button.callback("Years +1", "years:+1")
+    ],
+    [
       Markup.button.callback("Return -2%", "ret:-2"),
-      Markup.button.callback("Return +2%", "ret:+2")
+      Markup.button.callback("Return +2%", "ret:+2"),
+      Markup.button.callback(shockOn ? `${p.shockPct}%` : "Shock", "shock:toggle"),
+      Markup.button.callback(shockOn ? "Worse" : "--", shockOn ? "shockpct:-10" : "noop")
     ],
     [
-      Markup.button.callback(shockOn ? "Shock ON" : "Shock OFF", "shock:toggle"),
-      Markup.button.callback("Shock year -1", shockOn ? "shockyear:-1" : "noop"),
-      Markup.button.callback("Shock year +1", shockOn ? "shockyear:+1" : "noop")
-    ],
-    [
+      Markup.button.callback("Yr -1", shockOn ? "shockyear:-1" : "noop"),
+      Markup.button.callback("Yr +1", shockOn ? "shockyear:+1" : "noop"),
       Markup.button.callback("Base", "preset:base"),
-      Markup.button.callback("Bull", "preset:bull"),
+      Markup.button.callback("Bull", "preset:bull")
+    ],
+    [
       Markup.button.callback("Pain", "preset:pain"),
       Markup.button.callback("Share", "share")
     ]
@@ -442,10 +451,13 @@ function buildCaption(sim) {
   if (meta.length === 0) meta.push("Shock: off");
   const line2 = escHtml(meta.join(" | "));
 
+  // Calculate ROI percentage
+  const roi = sim.contributed > 0 ? ((sim.gains / sim.contributed) * 100).toFixed(1) : "0.0";
+
   const stats = [
     `Contributed: $${formatMoney(sim.contributed)}`,
     `Final: $${formatMoney(sim.finalValue)}`,
-    `Gains: $${formatMoney(sim.gains)}`,
+    `Gains: $${formatMoney(sim.gains)} (${roi}% ROI)`,
     `Max drawdown: ${sim.maxDrawdownPct.toFixed(1)}%`
   ];
 
@@ -611,6 +623,31 @@ bot.action(/^ret:([+-]\d+)$/, async (ctx) => {
   const cur = userState.get(userId) || clampParams({});
   const delta = Number(ctx.match[1]);
   await renderCard(ctx, userId, { ...cur, annualReturnPct: (cur.annualReturnPct || 0) + delta });
+});
+
+bot.action(/^amt:([+-]\d+)$/, async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
+
+  const cur = userState.get(userId) || clampParams({});
+  const delta = Number(ctx.match[1]);
+  await renderCard(ctx, userId, { ...cur, weeklyAmount: Math.max(0, (cur.weeklyAmount || 0) + delta) });
+});
+
+bot.action(/^shockpct:([+-]\d+)$/, async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
+
+  const cur = userState.get(userId) || clampParams({});
+  if (cur.shockPct === null) {
+    try { await ctx.answerCbQuery("Turn shock on first"); } catch {}
+    return;
+  }
+  const delta = Number(ctx.match[1]);
+  const newShock = Math.max(-95, Math.min(0, (cur.shockPct || -30) + delta));
+  await renderCard(ctx, userId, { ...cur, shockPct: newShock });
 });
 
 bot.action("shock:toggle", async (ctx) => {
