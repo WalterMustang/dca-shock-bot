@@ -1,22 +1,21 @@
-// index.js
-import { Telegraf, Markup } from "telegraf";
+const { Telegraf, Markup } = require("telegraf");
 
 const token = process.env.BOT_TOKEN;
 if (!token) throw new Error("Missing BOT_TOKEN env var");
 
 const bot = new Telegraf(token);
 
-// Optional: comment out if you do not want logs
+// Log incoming messages (helps debugging on Railway)
 bot.use(async (ctx, next) => {
   const txt = ctx.message?.text;
   if (txt) console.log("IN:", txt);
   return next();
 });
 
-// In-memory state per user (no database)
+// In-memory state
 const userState = new Map();
 
-// Simple per-user rate limit (button spam protection)
+// Rate limit
 const lastCall = new Map();
 function isRateLimited(userId, ms = 900) {
   const now = Date.now();
@@ -26,9 +25,11 @@ function isRateLimited(userId, ms = 900) {
   return false;
 }
 
-// MarkdownV2 escape for captions
-function escMdV2(s) {
-  return String(s).replace(/[_*[\]()~`>#+=|{}.!-]/g, "\\$&");
+function escHtml(s) {
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 function toNum(x, fallback) {
@@ -141,7 +142,6 @@ function formatMoney(x) {
 }
 
 function parseDcaCommand(text) {
-  // /dca <weekly> <years> <annual_return> [fee <annual_fee>] [shock <shock_pct> at <shock_year>]
   const parts = String(text || "").trim().split(/\s+/);
 
   let weeklyAmount = 100;
@@ -169,7 +169,6 @@ function parseDcaCommand(text) {
       const sPct = toNum(parts[i + 1], null);
       const at = parts[i + 2]?.toLowerCase();
       const sYear = toNum(parts[i + 3], null);
-
       if (sPct !== null && at === "at" && sYear !== null) {
         shockPct = sPct;
         shockYear = sYear;
@@ -182,8 +181,8 @@ function parseDcaCommand(text) {
   return clampParams({ weeklyAmount, years, annualReturnPct, annualFeePct, shockPct, shockYear });
 }
 
-function makeAppleishQuickChartUrl(series) {
-  // Sample to keep URL size reasonable
+// QuickChart URL (simple, clean)
+function quickChartUrl(series) {
   const maxPoints = 260;
   const step = Math.max(1, Math.floor(series.length / maxPoints));
   const sampled = [];
@@ -204,26 +203,13 @@ function makeAppleishQuickChartUrl(series) {
     },
     options: {
       responsive: false,
-      plugins: {
-        legend: { display: false },
-        title: {
-          display: true,
-          text: "DCA Projection",
-          font: { size: 18, weight: "600" },
-          padding: { top: 6, bottom: 10 }
-        }
-      },
+      plugins: { legend: { display: false } },
       layout: { padding: 18 },
       scales: {
-        x: {
-          display: false,
-          grid: { display: false }
-        },
+        x: { display: false },
         y: {
           grid: { color: "rgba(0,0,0,0.06)" },
-          ticks: {
-            callback: (v) => Number(v).toLocaleString()
-          }
+          ticks: { callback: (v) => Number(v).toLocaleString() }
         }
       }
     }
@@ -233,37 +219,10 @@ function makeAppleishQuickChartUrl(series) {
   return `https://quickchart.io/chart?c=${encoded}&w=980&h=560&backgroundColor=white`;
 }
 
-function buildCaption(sim) {
-  const p = sim.params;
-  const lines = [];
-
-  lines.push(`*${escMdV2("DCA Shock Bot")}*`);
-  lines.push(escMdV2(`Weekly: $${formatMoney(p.weeklyAmount)} | Years: ${p.years} | Return: ${p.annualReturnPct}%`));
-
-  const meta = [];
-  if (p.annualFeePct > 0) meta.push(`Fee: ${p.annualFeePct}%`);
-  if (p.shockPct !== null && p.shockYear !== null) meta.push(`Shock: ${p.shockPct}% @ year ${p.shockYear}`);
-  if (meta.length === 0) meta.push("Shock: off");
-  lines.push(escMdV2(meta.join(" | ")));
-
-  lines.push("");
-  lines.push(escMdV2(`Contributed: $${formatMoney(sim.contributed)}`));
-  lines.push(escMdV2(`Final: $${formatMoney(sim.finalValue)}`));
-  lines.push(escMdV2(`Gains: $${formatMoney(sim.gains)}`));
-  lines.push(escMdV2(`Max drawdown: ${sim.maxDrawdownPct.toFixed(1)}%`));
-
-  if (p.shockPct !== null && p.shockYear !== null) {
-    const rec = sim.recoveryWeeks === null ? "not reached" : `${sim.recoveryWeeks} weeks`;
-    lines.push(escMdV2(`Recovery: ${rec}`));
-  }
-
-  return lines.join("\n");
-}
-
 function keyboardFor(p) {
   const shockOn = p.shockPct !== null && p.shockYear !== null;
 
-  const rows = [
+  return Markup.inlineKeyboard([
     [
       Markup.button.callback("Years -1", "years:-1"),
       Markup.button.callback("Years +1", "years:+1"),
@@ -281,9 +240,35 @@ function keyboardFor(p) {
       Markup.button.callback("Pain", "preset:pain"),
       Markup.button.callback("Share", "share")
     ]
+  ]);
+}
+
+function buildCaption(sim) {
+  const p = sim.params;
+
+  const header = `<b>${escHtml("DCA Shock Bot")}</b>`;
+  const line1 = escHtml(`Weekly: $${formatMoney(p.weeklyAmount)} | Years: ${p.years} | Return: ${p.annualReturnPct}%`);
+
+  const meta = [];
+  if (p.annualFeePct > 0) meta.push(`Fee: ${p.annualFeePct}%`);
+  if (p.shockPct !== null && p.shockYear !== null) meta.push(`Shock: ${p.shockPct}% @ year ${p.shockYear}`);
+  if (meta.length === 0) meta.push("Shock: off");
+
+  const line2 = escHtml(meta.join(" | "));
+
+  const stats = [
+    `Contributed: $${formatMoney(sim.contributed)}`,
+    `Final: $${formatMoney(sim.finalValue)}`,
+    `Gains: $${formatMoney(sim.gains)}`,
+    `Max drawdown: ${sim.maxDrawdownPct.toFixed(1)}%`
   ];
 
-  return Markup.inlineKeyboard(rows);
+  if (p.shockPct !== null && p.shockYear !== null) {
+    const rec = sim.recoveryWeeks === null ? "not reached" : `${sim.recoveryWeeks} weeks`;
+    stats.push(`Recovery: ${rec}`);
+  }
+
+  return [header, line1, line2, "", escHtml(stats.join("\n"))].join("\n");
 }
 
 async function renderCard(ctx, userId, params) {
@@ -291,57 +276,45 @@ async function renderCard(ctx, userId, params) {
   userState.set(userId, p);
 
   const sim = simulateDCA(p);
-  const chartUrl = makeAppleishQuickChartUrl(sim.series);
+  const chart = quickChartUrl(sim.series);
   const caption = buildCaption(sim);
   const kb = keyboardFor(p);
 
-  // One photo message with caption + buttons
   if (ctx.updateType === "callback_query") {
     try {
       await ctx.editMessageMedia(
-        { type: "photo", media: chartUrl, caption, parse_mode: "MarkdownV2" },
+        { type: "photo", media: chart, caption, parse_mode: "HTML" },
         { reply_markup: kb.reply_markup }
       );
     } catch (e) {
-      // If edit fails (message too old etc), send a new one
-      await ctx.replyWithPhoto(chartUrl, {
+      await ctx.replyWithPhoto(chart, {
         caption,
-        parse_mode: "MarkdownV2",
+        parse_mode: "HTML",
         reply_markup: kb.reply_markup
       });
     }
-    try {
-      await ctx.answerCbQuery();
-    } catch {}
+    try { await ctx.answerCbQuery(); } catch {}
     return;
   }
 
-  await ctx.replyWithPhoto(chartUrl, {
+  await ctx.replyWithPhoto(chart, {
     caption,
-    parse_mode: "MarkdownV2",
+    parse_mode: "HTML",
     reply_markup: kb.reply_markup
   });
 }
 
 // Commands
-bot.start(async (ctx) => {
-  const msg =
-    "DCA Shock Bot\n\n" +
-    "Try /dca 100 10 8\n" +
-    "Or type /help\n\n" +
-    "Presets: /base /bull /pain";
-  await ctx.reply(msg);
-});
+bot.start(async (ctx) => ctx.reply("DCA Shock Bot. Type /help"));
+bot.command("ping", async (ctx) => ctx.reply("pong"));
 
 bot.command("help", async (ctx) => {
   const msg =
-    "Usage:\n" +
-    "/dca <weekly> <years> <annual_return> [fee <annual_fee>] [shock <shock_pct> at <shock_year>]\n\n" +
-    "Examples:\n" +
+    "Try:\n" +
     "/dca 100 10 8\n" +
     "/dca 100 10 8 shock -30 at 3\n" +
     "/dca 100 10 8 fee 0.2 shock -30 at 3\n\n" +
-    "Tap presets below or run a command.";
+    "Or tap presets below.";
   const kb = Markup.inlineKeyboard([
     [Markup.button.callback("Base", "preset:base"), Markup.button.callback("Bull", "preset:bull"), Markup.button.callback("Pain", "preset:pain")],
     [Markup.button.callback("Run default", "run:default")]
@@ -354,73 +327,23 @@ bot.command("dca", async (ctx) => {
   if (!userId) return;
   if (isRateLimited(userId)) return;
 
-  const params = parseDcaCommand(ctx.message?.text || "/dca");
-  await renderCard(ctx, userId, params);
-});
-
-bot.command("base", async (ctx) => {
-  const userId = ctx.from?.id;
-  if (!userId) return;
-  if (isRateLimited(userId)) return;
-
-  await renderCard(ctx, userId, {
-    weeklyAmount: 100,
-    years: 10,
-    annualReturnPct: 7,
-    annualFeePct: 0,
-    shockPct: -30,
-    shockYear: 3
-  });
-});
-
-bot.command("bull", async (ctx) => {
-  const userId = ctx.from?.id;
-  if (!userId) return;
-  if (isRateLimited(userId)) return;
-
-  await renderCard(ctx, userId, {
-    weeklyAmount: 100,
-    years: 10,
-    annualReturnPct: 12,
-    annualFeePct: 0,
-    shockPct: null,
-    shockYear: null
-  });
-});
-
-bot.command("pain", async (ctx) => {
-  const userId = ctx.from?.id;
-  if (!userId) return;
-  if (isRateLimited(userId)) return;
-
-  await renderCard(ctx, userId, {
-    weeklyAmount: 100,
-    years: 10,
-    annualReturnPct: 7,
-    annualFeePct: 0,
-    shockPct: -50,
-    shockYear: 2
-  });
-});
-
-// Button actions
-bot.action("noop", async (ctx) => {
   try {
-    await ctx.answerCbQuery("Turn shock on first");
-  } catch {}
+    const params = parseDcaCommand(ctx.message?.text || "/dca");
+    await renderCard(ctx, userId, params);
+  } catch (e) {
+    console.error("DCA ERROR:", e);
+    await ctx.reply("Error running sim. Try /help");
+  }
+});
+
+bot.action("noop", async (ctx) => {
+  try { await ctx.answerCbQuery("Turn shock on first"); } catch {}
 });
 
 bot.action("run:default", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
-  await renderCard(ctx, userId, {
-    weeklyAmount: 100,
-    years: 10,
-    annualReturnPct: 7,
-    annualFeePct: 0,
-    shockPct: -30,
-    shockYear: 3
-  });
+  await renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -30, shockYear: 3 });
 });
 
 bot.action(/^preset:(.+)$/, async (ctx) => {
@@ -428,18 +351,11 @@ bot.action(/^preset:(.+)$/, async (ctx) => {
   if (!userId) return;
 
   const which = ctx.match[1];
-  if (which === "base") {
-    return renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -30, shockYear: 3 });
-  }
-  if (which === "bull") {
-    return renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 12, annualFeePct: 0, shockPct: null, shockYear: null });
-  }
-  if (which === "pain") {
-    return renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -50, shockYear: 2 });
-  }
-  try {
-    await ctx.answerCbQuery();
-  } catch {}
+  if (which === "base") return renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -30, shockYear: 3 });
+  if (which === "bull") return renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 12, annualFeePct: 0, shockPct: null, shockYear: null });
+  if (which === "pain") return renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -50, shockYear: 2 });
+
+  try { await ctx.answerCbQuery(); } catch {}
 });
 
 bot.action(/^years:([+-]\d+)$/, async (ctx) => {
@@ -470,11 +386,9 @@ bot.action("shock:toggle", async (ctx) => {
   const cur = userState.get(userId) || clampParams({});
   const shockOn = cur.shockPct !== null && cur.shockYear !== null;
 
-  if (shockOn) {
-    await renderCard(ctx, userId, { ...cur, shockPct: null, shockYear: null });
-  } else {
-    await renderCard(ctx, userId, { ...cur, shockPct: -30, shockYear: Math.min(cur.years || 10, 3) });
-  }
+  if (shockOn) return renderCard(ctx, userId, { ...cur, shockPct: null, shockYear: null });
+
+  return renderCard(ctx, userId, { ...cur, shockPct: -30, shockYear: Math.min(cur.years || 10, 3) });
 });
 
 bot.action(/^shockyear:([+-]\d+)$/, async (ctx) => {
@@ -484,9 +398,7 @@ bot.action(/^shockyear:([+-]\d+)$/, async (ctx) => {
 
   const cur = userState.get(userId);
   if (!cur || cur.shockPct === null || cur.shockYear === null) {
-    try {
-      await ctx.answerCbQuery("Turn shock on first");
-    } catch {}
+    try { await ctx.answerCbQuery("Turn shock on first"); } catch {}
     return;
   }
 
@@ -500,9 +412,7 @@ bot.action("share", async (ctx) => {
 
   const cur = userState.get(userId);
   if (!cur) {
-    try {
-      await ctx.answerCbQuery("Run a sim first");
-    } catch {}
+    try { await ctx.answerCbQuery("Run a sim first"); } catch {}
     return;
   }
 
@@ -510,22 +420,24 @@ bot.action("share", async (ctx) => {
   const shockPart = cur.shockPct !== null && cur.shockYear !== null ? ` shock ${cur.shockPct} at ${cur.shockYear}` : "";
   const cmd = `/dca ${cur.weeklyAmount} ${cur.years} ${cur.annualReturnPct}${feePart}${shockPart}`;
 
-  const line =
-    `I ran $${formatMoney(cur.weeklyAmount)}/week for ${cur.years}y at ${cur.annualReturnPct}%` +
-    (shockPart ? ` with a ${cur.shockPct}% shock in year ${cur.shockYear}` : "") +
-    ".";
-
-  await ctx.reply(`${line}\n\nCommand:\n${cmd}`);
-
-  try {
-    await ctx.answerCbQuery();
-  } catch {}
+  await ctx.reply(`Share:\nI ran $${formatMoney(cur.weeklyAmount)}/week for ${cur.years}y at ${cur.annualReturnPct}%${shockPart ? ` with a ${cur.shockPct}% shock in year ${cur.shockYear}` : ""}.\n\nCommand:\n${cmd}`);
+  try { await ctx.answerCbQuery(); } catch {}
 });
 
-// Catch errors so the bot does not silently die
-bot.catch((err) => {
-  console.error("BOT ERROR:", err);
+// Catch-all: if you type random text, it tells you the bot is alive
+bot.on("text", async (ctx) => {
+  const t = ctx.message?.text || "";
+  if (t.startsWith("/")) return;
+  await ctx.reply("Type /help or /dca 100 10 8");
 });
 
-bot.launch();
-console.log("Bot running with long polling");
+bot.catch((err) => console.error("BOT ERROR:", err));
+
+async function start() {
+  // Important: makes long polling reliable on hosted services
+  await bot.telegram.deleteWebhook().catch(() => {});
+  await bot.launch();
+  console.log("Bot running with long polling");
+}
+
+start();
