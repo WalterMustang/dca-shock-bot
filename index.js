@@ -1,3 +1,5 @@
+// index.js (CommonJS, Railway-friendly, interactive buttons, Apple-ish chart, with fallbacks)
+
 const { Telegraf, Markup } = require("telegraf");
 
 const token = process.env.BOT_TOKEN;
@@ -5,17 +7,17 @@ if (!token) throw new Error("Missing BOT_TOKEN env var");
 
 const bot = new Telegraf(token);
 
-// Log incoming messages (helps debugging on Railway)
+// Log incoming messages (debug)
 bot.use(async (ctx, next) => {
   const txt = ctx.message?.text;
   if (txt) console.log("IN:", txt);
   return next();
 });
 
-// In-memory state
+// In-memory state per user
 const userState = new Map();
 
-// Rate limit
+// Simple per-user rate limit
 const lastCall = new Map();
 function isRateLimited(userId, ms = 900) {
   const now = Date.now();
@@ -25,6 +27,7 @@ function isRateLimited(userId, ms = 900) {
   return false;
 }
 
+// HTML escape for captions
 function escHtml(s) {
   return String(s)
     .replaceAll("&", "&amp;")
@@ -142,6 +145,7 @@ function formatMoney(x) {
 }
 
 function parseDcaCommand(text) {
+  // /dca <weekly> <years> <annual_return> [fee <annual_fee>] [shock <shock_pct> at <shock_year>]
   const parts = String(text || "").trim().split(/\s+/);
 
   let weeklyAmount = 100;
@@ -181,9 +185,10 @@ function parseDcaCommand(text) {
   return clampParams({ weeklyAmount, years, annualReturnPct, annualFeePct, shockPct, shockYear });
 }
 
-// QuickChart URL (simple, clean)
+// Shorter QuickChart URL (important). Apple-ish minimalist line.
+// If Telegram still blocks images, we fall back to text + link.
 function quickChartUrl(series) {
-  const maxPoints = 260;
+  const maxPoints = 180;
   const step = Math.max(1, Math.floor(series.length / maxPoints));
   const sampled = [];
   for (let i = 0; i < series.length; i += step) sampled.push(Math.round(series[i]));
@@ -191,7 +196,6 @@ function quickChartUrl(series) {
   const cfg = {
     type: "line",
     data: {
-      labels: sampled.map((_, i) => i),
       datasets: [
         {
           data: sampled,
@@ -203,14 +207,19 @@ function quickChartUrl(series) {
     },
     options: {
       responsive: false,
-      plugins: { legend: { display: false } },
+      plugins: {
+        legend: { display: false },
+        title: {
+          display: true,
+          text: "DCA Projection",
+          font: { size: 18, weight: "600" },
+          padding: { top: 6, bottom: 10 }
+        }
+      },
       layout: { padding: 18 },
       scales: {
-        x: { display: false },
-        y: {
-          grid: { color: "rgba(0,0,0,0.06)" },
-          ticks: { callback: (v) => Number(v).toLocaleString() }
-        }
+        x: { display: false, grid: { display: false } },
+        y: { grid: { color: "rgba(0,0,0,0.06)" } }
       }
     }
   };
@@ -253,7 +262,6 @@ function buildCaption(sim) {
   if (p.annualFeePct > 0) meta.push(`Fee: ${p.annualFeePct}%`);
   if (p.shockPct !== null && p.shockYear !== null) meta.push(`Shock: ${p.shockPct}% @ year ${p.shockYear}`);
   if (meta.length === 0) meta.push("Shock: off");
-
   const line2 = escHtml(meta.join(" | "));
 
   const stats = [
@@ -271,6 +279,10 @@ function buildCaption(sim) {
   return [header, line1, line2, "", escHtml(stats.join("\n"))].join("\n");
 }
 
+function stripHtml(html) {
+  return String(html).replace(/<[^>]*>/g, "");
+}
+
 async function renderCard(ctx, userId, params) {
   const p = clampParams(params);
   userState.set(userId, p);
@@ -280,6 +292,7 @@ async function renderCard(ctx, userId, params) {
   const caption = buildCaption(sim);
   const kb = keyboardFor(p);
 
+  // Callback query: edit existing message if possible
   if (ctx.updateType === "callback_query") {
     try {
       await ctx.editMessageMedia(
@@ -287,21 +300,32 @@ async function renderCard(ctx, userId, params) {
         { reply_markup: kb.reply_markup }
       );
     } catch (e) {
-      await ctx.replyWithPhoto(chart, {
-        caption,
-        parse_mode: "HTML",
-        reply_markup: kb.reply_markup
-      });
+      console.error("EDIT MEDIA FAILED:", e);
+
+      // Fallback: send new message
+      try {
+        await ctx.replyWithPhoto(chart, { caption, parse_mode: "HTML", reply_markup: kb.reply_markup });
+      } catch (e2) {
+        console.error("PHOTO SEND FAILED:", e2);
+        await ctx.reply(stripHtml(caption), { reply_markup: kb.reply_markup });
+        await ctx.reply(`Chart: ${chart}`);
+      }
     }
-    try { await ctx.answerCbQuery(); } catch {}
+
+    try {
+      await ctx.answerCbQuery();
+    } catch {}
     return;
   }
 
-  await ctx.replyWithPhoto(chart, {
-    caption,
-    parse_mode: "HTML",
-    reply_markup: kb.reply_markup
-  });
+  // Normal command: send new message
+  try {
+    await ctx.replyWithPhoto(chart, { caption, parse_mode: "HTML", reply_markup: kb.reply_markup });
+  } catch (e) {
+    console.error("PHOTO SEND FAILED:", e);
+    await ctx.reply(stripHtml(caption), { reply_markup: kb.reply_markup });
+    await ctx.reply(`Chart: ${chart}`);
+  }
 }
 
 // Commands
@@ -331,13 +355,41 @@ bot.command("dca", async (ctx) => {
     const params = parseDcaCommand(ctx.message?.text || "/dca");
     await renderCard(ctx, userId, params);
   } catch (e) {
-    console.error("DCA ERROR:", e);
+    console.error("DCA ERROR FULL:", e);
     await ctx.reply("Error running sim. Try /help");
   }
 });
 
+// Preset commands (still useful)
+bot.command("base", async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  if (isRateLimited(userId)) return;
+
+  await renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -30, shockYear: 3 });
+});
+
+bot.command("bull", async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  if (isRateLimited(userId)) return;
+
+  await renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 12, annualFeePct: 0, shockPct: null, shockYear: null });
+});
+
+bot.command("pain", async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  if (isRateLimited(userId)) return;
+
+  await renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -50, shockYear: 2 });
+});
+
+// Button actions
 bot.action("noop", async (ctx) => {
-  try { await ctx.answerCbQuery("Turn shock on first"); } catch {}
+  try {
+    await ctx.answerCbQuery("Turn shock on first");
+  } catch {}
 });
 
 bot.action("run:default", async (ctx) => {
@@ -355,7 +407,9 @@ bot.action(/^preset:(.+)$/, async (ctx) => {
   if (which === "bull") return renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 12, annualFeePct: 0, shockPct: null, shockYear: null });
   if (which === "pain") return renderCard(ctx, userId, { weeklyAmount: 100, years: 10, annualReturnPct: 7, annualFeePct: 0, shockPct: -50, shockYear: 2 });
 
-  try { await ctx.answerCbQuery(); } catch {}
+  try {
+    await ctx.answerCbQuery();
+  } catch {}
 });
 
 bot.action(/^years:([+-]\d+)$/, async (ctx) => {
@@ -398,7 +452,9 @@ bot.action(/^shockyear:([+-]\d+)$/, async (ctx) => {
 
   const cur = userState.get(userId);
   if (!cur || cur.shockPct === null || cur.shockYear === null) {
-    try { await ctx.answerCbQuery("Turn shock on first"); } catch {}
+    try {
+      await ctx.answerCbQuery("Turn shock on first");
+    } catch {}
     return;
   }
 
@@ -412,7 +468,9 @@ bot.action("share", async (ctx) => {
 
   const cur = userState.get(userId);
   if (!cur) {
-    try { await ctx.answerCbQuery("Run a sim first"); } catch {}
+    try {
+      await ctx.answerCbQuery("Run a sim first");
+    } catch {}
     return;
   }
 
@@ -420,11 +478,18 @@ bot.action("share", async (ctx) => {
   const shockPart = cur.shockPct !== null && cur.shockYear !== null ? ` shock ${cur.shockPct} at ${cur.shockYear}` : "";
   const cmd = `/dca ${cur.weeklyAmount} ${cur.years} ${cur.annualReturnPct}${feePart}${shockPart}`;
 
-  await ctx.reply(`Share:\nI ran $${formatMoney(cur.weeklyAmount)}/week for ${cur.years}y at ${cur.annualReturnPct}%${shockPart ? ` with a ${cur.shockPct}% shock in year ${cur.shockYear}` : ""}.\n\nCommand:\n${cmd}`);
-  try { await ctx.answerCbQuery(); } catch {}
+  await ctx.reply(
+    `Share:\nI ran $${formatMoney(cur.weeklyAmount)}/week for ${cur.years}y at ${cur.annualReturnPct}%` +
+      (shockPart ? ` with a ${cur.shockPct}% shock in year ${cur.shockYear}` : "") +
+      `.\n\nCommand:\n${cmd}`
+  );
+
+  try {
+    await ctx.answerCbQuery();
+  } catch {}
 });
 
-// Catch-all: if you type random text, it tells you the bot is alive
+// Catch-all so you always get some response
 bot.on("text", async (ctx) => {
   const t = ctx.message?.text || "";
   if (t.startsWith("/")) return;
@@ -434,7 +499,7 @@ bot.on("text", async (ctx) => {
 bot.catch((err) => console.error("BOT ERROR:", err));
 
 async function start() {
-  // Important: makes long polling reliable on hosted services
+  // Avoid polling conflicts and webhook leftovers
   await bot.telegram.deleteWebhook().catch(() => {});
   await bot.launch();
   console.log("Bot running with long polling");
