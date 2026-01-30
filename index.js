@@ -362,6 +362,7 @@ function quickChartUrl(series) {
     data: {
       datasets: [
         {
+          label: "Portfolio",
           data: sampled,
           pointRadius: 0,
           borderWidth: 3,
