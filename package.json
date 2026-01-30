@@ -1,10 +1,13 @@
 {
   "name": "dca-shock-bot",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "description": "Telegram bot for DCA investment simulation with market shock modeling",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "NODE_ENV=test node index.test.js"
   },
+  "keywords": ["telegram", "bot", "dca", "investment", "simulation"],
   "dependencies": {
     "telegraf": "^4.16.3"
   },
