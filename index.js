@@ -485,6 +485,11 @@ function keyboardFor(p) {
       Markup.button.callback("Bull", "preset:bull"),
       Markup.button.callback("Pain", "preset:pain"),
       Markup.button.callback("Share", "share")
+    ],
+    [
+      Markup.button.callback("📚 ETFs", "showetf"),
+      Markup.button.callback("❓ Help", "showhelp"),
+      Markup.button.callback("✕ Close", "close")
     ]
   ]);
 }
@@ -626,7 +631,8 @@ bot.action("showetf", async (ctx) => {
 
   const kb = Markup.inlineKeyboard([
     [Markup.button.callback("VOO", "etf:voo"), Markup.button.callback("QQQ", "etf:qqq"), Markup.button.callback("VTI", "etf:vti")],
-    [Markup.button.callback("VXUS", "etf:vxus"), Markup.button.callback("BND", "etf:bnd"), Markup.button.callback("BTC", "etf:btc")]
+    [Markup.button.callback("VXUS", "etf:vxus"), Markup.button.callback("BND", "etf:bnd"), Markup.button.callback("BTC", "etf:btc")],
+    [Markup.button.callback("❓ Help", "showhelp"), Markup.button.callback("✕ Close", "close")]
   ]);
 
   await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
@@ -648,7 +654,8 @@ bot.action("showhelp", async (ctx) => {
     "<b>Share:</b> Export your results";
 
   const kb = Markup.inlineKeyboard([
-    [Markup.button.callback("▶️ Try VOO", "etf:voo"), Markup.button.callback("▶️ Try QQQ", "etf:qqq")]
+    [Markup.button.callback("▶️ Try VOO", "etf:voo"), Markup.button.callback("▶️ Try QQQ", "etf:qqq")],
+    [Markup.button.callback("📚 ETFs", "showetf"), Markup.button.callback("✕ Close", "close")]
   ]);
 
   await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
@@ -669,7 +676,8 @@ bot.command("help", async (ctx) => {
     "VXUS 5% | BND 4% | BTC 50%";
   const kb = Markup.inlineKeyboard([
     [Markup.button.callback("VOO", "etf:voo"), Markup.button.callback("QQQ", "etf:qqq"), Markup.button.callback("BTC", "etf:btc")],
-    [Markup.button.callback("Base", "preset:base"), Markup.button.callback("Bull", "preset:bull"), Markup.button.callback("Pain", "preset:pain")]
+    [Markup.button.callback("Base", "preset:base"), Markup.button.callback("Bull", "preset:bull"), Markup.button.callback("Pain", "preset:pain")],
+    [Markup.button.callback("✕ Close", "close")]
   ]);
   await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
 });
@@ -756,6 +764,10 @@ bot.command("etf", async (ctx) => {
       Markup.button.callback("VXUS", "etf:vxus"),
       Markup.button.callback("BND", "etf:bnd"),
       Markup.button.callback("BTC", "etf:btc")
+    ],
+    [
+      Markup.button.callback("❓ Help", "showhelp"),
+      Markup.button.callback("✕ Close", "close")
     ]
   ]);
 
@@ -789,6 +801,46 @@ bot.action("noop", async (ctx) => {
   try {
     await ctx.answerCbQuery("Turn shock on first");
   } catch {}
+});
+
+bot.action("close", async (ctx) => {
+  try {
+    await ctx.deleteMessage();
+    await ctx.answerCbQuery("Closed");
+  } catch {
+    try { await ctx.answerCbQuery(); } catch {}
+  }
+});
+
+bot.action("home", async (ctx) => {
+  try { await ctx.answerCbQuery(); } catch {}
+  const name = ctx.from?.first_name || "there";
+  const msg =
+    `👋 Hey ${name}! Welcome to <b>DCA Shock Bot</b>\n\n` +
+    `📈 I help you visualize how <b>weekly investing</b> grows over time — and what happens when markets crash.\n\n` +
+    `<b>What is DCA?</b>\n` +
+    `Dollar Cost Averaging = investing a fixed amount every week/month, no matter the price. It's how most people build wealth.\n\n` +
+    `<b>Try it now:</b>\n` +
+    `→ Tap an ETF below to see a simulation\n` +
+    `→ Or type: /dca 100 10 7 (= $100/week, 10 years, 7% return)\n\n` +
+    `💡 <i>Tip: Use /etf to learn about different investment options</i>`;
+
+  const kb = Markup.inlineKeyboard([
+    [
+      Markup.button.callback("🇺🇸 VOO (S&P 500)", "etf:voo"),
+      Markup.button.callback("💻 QQQ (Tech)", "etf:qqq")
+    ],
+    [
+      Markup.button.callback("🌍 VTI (Total US)", "etf:vti"),
+      Markup.button.callback("₿ Bitcoin", "etf:btc")
+    ],
+    [
+      Markup.button.callback("📚 What are ETFs?", "showetf"),
+      Markup.button.callback("❓ Help", "showhelp")
+    ]
+  ]);
+
+  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
 });
 
 bot.action("run:default", async (ctx) => {
