@@ -79,7 +79,9 @@ const DEFAULTS = {
   annualReturnPct: 7,
   annualFeePct: 0,
   shockPct: null,
-  shockYear: null
+  shockYear: null,
+  frequency: "weekly",  // "weekly" or "monthly"
+  inflationPct: 3       // for real return calculation
 };
 
 const LIMITS = {
@@ -87,7 +89,8 @@ const LIMITS = {
   years: { min: 0, max: 50 },
   annualReturnPct: { min: -100, max: 200 },
   annualFeePct: { min: 0, max: 5 },
-  shockPct: { min: -95, max: 0 }
+  shockPct: { min: -95, max: 0 },
+  inflationPct: { min: 0, max: 20 }
 };
 
 const RATE_LIMIT = {
@@ -254,25 +257,37 @@ function clampParams(p) {
  * @property {number} maxDrawdownPct - Maximum drawdown percentage
  * @property {number|null} recoveryWeeks - Weeks to recover from shock (null if not recovered)
  * @property {number[]} series - Weekly portfolio values for charting
+ * @property {object} milestones - Portfolio value at year milestones
+ * @property {number} inflationAdjusted - Final value adjusted for inflation
  */
 
 /**
  * Run a DCA (Dollar Cost Averaging) simulation with optional shock event
  * @param {object} params - Simulation parameters
- * @param {number} params.weeklyAmount - Weekly contribution amount
+ * @param {number} params.weeklyAmount - Weekly/monthly contribution amount
  * @param {number} params.years - Investment duration in years
  * @param {number} params.annualReturnPct - Expected annual return percentage
  * @param {number} params.annualFeePct - Annual management fee percentage
  * @param {number|null} params.shockPct - Shock event percentage (negative)
  * @param {number|null} params.shockYear - Year when shock occurs
+ * @param {string} params.frequency - "weekly" or "monthly"
+ * @param {number} params.inflationPct - Annual inflation rate
  * @returns {SimulationResult} Simulation results
  */
 function simulateDCA(params) {
   const p = clampParams(params);
 
-  const weeks = Math.max(0, Math.floor(p.years * 52));
-  const rWeek = weeklyRateFromAnnual(p.annualReturnPct);
-  const feeFactor = weeklyFeeFactorFromAnnual(p.annualFeePct);
+  // Support both weekly and monthly contributions
+  const isMonthly = p.frequency === "monthly";
+  const periodsPerYear = isMonthly ? 12 : 52;
+  const totalPeriods = Math.max(0, Math.floor(p.years * periodsPerYear));
+
+  const rPeriod = isMonthly
+    ? Math.pow(1 + p.annualReturnPct / 100, 1 / 12) - 1
+    : weeklyRateFromAnnual(p.annualReturnPct);
+  const feeFactor = isMonthly
+    ? Math.pow(1 - p.annualFeePct / 100, 1 / 12)
+    : weeklyFeeFactorFromAnnual(p.annualFeePct);
 
   let portfolio = 0;
   let contributed = 0;
@@ -281,25 +296,26 @@ function simulateDCA(params) {
   let maxDrawdown = 0;
 
   const series = [];
+  const milestones = {};
 
-  let shockWeek = null;
+  let shockPeriod = null;
   if (p.shockPct !== null && p.shockYear !== null) {
-    shockWeek = Math.min(weeks, Math.max(1, Math.floor(p.shockYear) * 52));
+    shockPeriod = Math.min(totalPeriods, Math.max(1, Math.floor(p.shockYear) * periodsPerYear));
   }
 
   let preShockPeak = null;
-  let recoveryWeeks = null;
+  let recoveryPeriods = null;
   let shockApplied = false;
   let afterShockCounter = 0;
 
-  for (let w = 1; w <= weeks; w++) {
+  for (let period = 1; period <= totalPeriods; period++) {
     portfolio += p.weeklyAmount;
     contributed += p.weeklyAmount;
 
-    portfolio *= 1 + rWeek;
-    portfolio *= feeFactor;
+    portfolio *= 1 + rPeriod;
+    if (feeFactor < 1) portfolio *= feeFactor;
 
-    if (shockWeek !== null && w === shockWeek) {
+    if (shockPeriod !== null && period === shockPeriod) {
       preShockPeak = peak > 0 ? peak : portfolio;
       portfolio *= 1 + p.shockPct / 100;
       shockApplied = true;
@@ -313,13 +329,33 @@ function simulateDCA(params) {
       if (dd < maxDrawdown) maxDrawdown = dd;
     }
 
-    if (shockApplied && recoveryWeeks === null && preShockPeak !== null) {
+    if (shockApplied && recoveryPeriods === null && preShockPeak !== null) {
       afterShockCounter += 1;
-      if (portfolio >= preShockPeak) recoveryWeeks = afterShockCounter;
+      if (portfolio >= preShockPeak) recoveryPeriods = afterShockCounter;
     }
 
     series.push(portfolio);
+
+    // Record milestones at year boundaries
+    const year = Math.floor(period / periodsPerYear);
+    if (period === year * periodsPerYear && year > 0) {
+      milestones[year] = portfolio;
+    }
   }
+
+  // Final milestone
+  if (p.years > 0) {
+    milestones[p.years] = portfolio;
+  }
+
+  // Calculate inflation-adjusted final value
+  const inflationFactor = Math.pow(1 + (p.inflationPct || 3) / 100, p.years);
+  const inflationAdjusted = portfolio / inflationFactor;
+
+  // Convert recovery periods to weeks for display
+  const recoveryWeeks = recoveryPeriods !== null
+    ? (isMonthly ? recoveryPeriods * 4 : recoveryPeriods)
+    : null;
 
   return {
     params: p,
@@ -328,7 +364,9 @@ function simulateDCA(params) {
     gains: portfolio - contributed,
     maxDrawdownPct: maxDrawdown * 100,
     recoveryWeeks,
-    series
+    series,
+    milestones,
+    inflationAdjusted
   };
 }
 
@@ -502,8 +540,9 @@ function keyboardFor(p) {
 function buildCaption(sim) {
   const p = sim.params;
 
-  const header = `<b>${escHtml("DCA Shock Bot")}</b>`;
-  const line1 = escHtml(`Weekly: $${formatMoney(p.weeklyAmount)} | Years: ${p.years} | Return: ${p.annualReturnPct}%`);
+  const header = `<b>📈 DCA Shock Bot</b>`;
+  const freqLabel = p.frequency === "monthly" ? "Monthly" : "Weekly";
+  const line1 = escHtml(`${freqLabel}: $${formatMoney(p.weeklyAmount)} | Years: ${p.years} | Return: ${p.annualReturnPct}%`);
 
   const meta = [];
   if (p.annualFeePct > 0) meta.push(`Fee: ${p.annualFeePct}%`);
@@ -515,15 +554,38 @@ function buildCaption(sim) {
   const roi = sim.contributed > 0 ? ((sim.gains / sim.contributed) * 100).toFixed(1) : "0.0";
 
   const stats = [
-    `Contributed: $${formatMoney(sim.contributed)}`,
-    `Final: $${formatMoney(sim.finalValue)}`,
-    `Gains: $${formatMoney(sim.gains)} (${roi}% ROI)`,
-    `Max drawdown: ${sim.maxDrawdownPct.toFixed(1)}%`
+    `💰 Contributed: $${formatMoney(sim.contributed)}`,
+    `📈 Final: $${formatMoney(sim.finalValue)}`,
+    `✅ Gains: $${formatMoney(sim.gains)} (${roi}% ROI)`,
+    `📉 Max drawdown: ${sim.maxDrawdownPct.toFixed(1)}%`
   ];
+
+  // Add inflation-adjusted value
+  if (sim.inflationAdjusted) {
+    stats.push(`💵 After ${p.inflationPct || 3}% inflation: $${formatMoney(sim.inflationAdjusted)}`);
+  }
 
   if (p.shockPct !== null && p.shockYear !== null) {
     const rec = sim.recoveryWeeks === null ? "not reached" : `${sim.recoveryWeeks} weeks`;
-    stats.push(`Recovery: ${rec}`);
+    stats.push(`🔄 Recovery: ${rec}`);
+  }
+
+  // Add milestones (show 3 key ones)
+  if (sim.milestones && Object.keys(sim.milestones).length > 0) {
+    const years = Object.keys(sim.milestones).map(Number).sort((a, b) => a - b);
+    const keyYears = [];
+    if (years.length <= 3) {
+      keyYears.push(...years);
+    } else {
+      // Show first, middle, last
+      keyYears.push(years[0]);
+      keyYears.push(years[Math.floor(years.length / 2)]);
+      keyYears.push(years[years.length - 1]);
+    }
+    const milestonesStr = keyYears
+      .map(y => `Yr${y}: $${formatMoney(sim.milestones[y])}`)
+      .join(" → ");
+    stats.push(`📅 ${milestonesStr}`);
   }
 
   return [header, line1, line2, "", escHtml(stats.join("\n"))].join("\n");
@@ -665,18 +727,22 @@ bot.command("ping", async (ctx) => ctx.reply("pong"));
 
 bot.command("help", async (ctx) => {
   const msg =
-    "📊 <b>DCA Shock Bot</b>\n\n" +
-    "<b>Commands:</b>\n" +
+    "📊 <b>DCA Shock Bot - Help</b>\n\n" +
+    "<b>Basic Commands:</b>\n" +
     "/dca 100 10 8 - $100/wk, 10yrs, 8%\n" +
     "/dca 100 10 8 shock -30 at 3\n" +
-    "/etf - Show ETF presets\n" +
-    "/voo /qqq /vti /btc - Quick ETF sim\n\n" +
-    "<b>ETFs (historical avg):</b>\n" +
-    "VOO 10.5% | QQQ 14% | VTI 10%\n" +
-    "VXUS 5% | BND 4% | BTC 50%";
+    "/monthly - Switch weekly↔monthly\n\n" +
+    "<b>ETFs:</b>\n" +
+    "/etf - Show all ETF presets\n" +
+    "/voo /qqq /vti /btc - Quick simulate\n\n" +
+    "<b>Tools:</b>\n" +
+    "/goal 1000000 20 10 - How much to invest for $1M?\n" +
+    "/compare voo qqq - Compare two ETFs\n\n" +
+    "<b>ETF Returns:</b>\n" +
+    "VOO 10.5% | QQQ 14% | VTI 10% | BTC 50%";
   const kb = Markup.inlineKeyboard([
+    [Markup.button.callback("🎯 Goal $1M", "goal:1000000"), Markup.button.callback("⚖️ VOO vs QQQ", "cmp:voo:qqq")],
     [Markup.button.callback("VOO", "etf:voo"), Markup.button.callback("QQQ", "etf:qqq"), Markup.button.callback("BTC", "etf:btc")],
-    [Markup.button.callback("Base", "preset:base"), Markup.button.callback("Bull", "preset:bull"), Markup.button.callback("Pain", "preset:pain")],
     [Markup.button.callback("✕ Close", "close")]
   ]);
   await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
@@ -716,6 +782,114 @@ bot.command("pain", async (ctx) => {
   if (!userId) return;
   if (isRateLimited(userId)) return;
   await renderCard(ctx, userId, PRESETS.pain);
+});
+
+// Goal Calculator - reverse DCA: how much to invest to reach a goal
+bot.command("goal", async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  if (isRateLimited(userId)) return;
+
+  const args = (ctx.message?.text || "").trim().split(/\s+/);
+  // /goal <target> <years> <return%>
+  const target = toNum(args[1], 1000000);
+  const years = toNum(args[2], 20);
+  const annualReturn = toNum(args[3], 10);
+
+  // Calculate required weekly contribution using future value of annuity formula
+  // FV = PMT * [((1 + r)^n - 1) / r]
+  // PMT = FV * r / ((1 + r)^n - 1)
+  const weeks = years * 52;
+  const weeklyRate = Math.pow(1 + annualReturn / 100, 1 / 52) - 1;
+
+  let weeklyNeeded;
+  if (weeklyRate === 0) {
+    weeklyNeeded = target / weeks;
+  } else {
+    weeklyNeeded = target * weeklyRate / (Math.pow(1 + weeklyRate, weeks) - 1);
+  }
+
+  const monthlyNeeded = weeklyNeeded * 52 / 12;
+
+  const msg =
+    `🎯 <b>Goal Calculator</b>\n\n` +
+    `Target: <b>$${formatMoney(target)}</b>\n` +
+    `Timeline: <b>${years} years</b>\n` +
+    `Expected return: <b>${annualReturn}%</b>\n\n` +
+    `<b>You need to invest:</b>\n` +
+    `💵 $${formatMoney(weeklyNeeded)}/week\n` +
+    `💵 $${formatMoney(monthlyNeeded)}/month\n\n` +
+    `<i>Tip: Try /dca ${Math.round(weeklyNeeded)} ${years} ${annualReturn} to simulate</i>`;
+
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.callback("▶️ Simulate this", `sim:${Math.round(weeklyNeeded)}:${years}:${annualReturn}`)],
+    [Markup.button.callback("🎯 $500k goal", "goal:500000"), Markup.button.callback("🎯 $1M goal", "goal:1000000")],
+    [Markup.button.callback("✕ Close", "close")]
+  ]);
+
+  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+});
+
+// Compare two ETFs/scenarios side by side
+bot.command("compare", async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  if (isRateLimited(userId)) return;
+
+  const args = (ctx.message?.text || "").trim().split(/\s+/);
+  const etf1 = args[1]?.toLowerCase() || "voo";
+  const etf2 = args[2]?.toLowerCase() || "qqq";
+
+  const preset1 = ETF_PRESETS[etf1];
+  const preset2 = ETF_PRESETS[etf2];
+
+  if (!preset1 || !preset2) {
+    await ctx.reply("Usage: /compare voo qqq\nAvailable: voo, qqq, vti, vxus, bnd, btc");
+    return;
+  }
+
+  const cur = userState.get(userId) || clampParams({});
+  const years = cur.years || 10;
+  const amount = cur.weeklyAmount || 100;
+
+  const sim1 = simulateDCA({ ...cur, annualReturnPct: preset1.annualReturnPct, annualFeePct: preset1.annualFeePct, shockPct: preset1.typicalShock, shockYear: 3 });
+  const sim2 = simulateDCA({ ...cur, annualReturnPct: preset2.annualReturnPct, annualFeePct: preset2.annualFeePct, shockPct: preset2.typicalShock, shockYear: 3 });
+
+  const roi1 = sim1.contributed > 0 ? ((sim1.gains / sim1.contributed) * 100).toFixed(1) : "0";
+  const roi2 = sim2.contributed > 0 ? ((sim2.gains / sim2.contributed) * 100).toFixed(1) : "0";
+
+  const winner = sim1.finalValue > sim2.finalValue ? preset1.name : preset2.name;
+  const diff = Math.abs(sim1.finalValue - sim2.finalValue);
+
+  const msg =
+    `⚖️ <b>Compare: ${preset1.name} vs ${preset2.name}</b>\n` +
+    `$${formatMoney(amount)}/week for ${years} years\n\n` +
+    `<b>${preset1.name}</b> (${preset1.annualReturnPct}% return)\n` +
+    `Final: $${formatMoney(sim1.finalValue)} | ROI: ${roi1}%\n` +
+    `Drawdown: ${sim1.maxDrawdownPct.toFixed(1)}%\n\n` +
+    `<b>${preset2.name}</b> (${preset2.annualReturnPct}% return)\n` +
+    `Final: $${formatMoney(sim2.finalValue)} | ROI: ${roi2}%\n` +
+    `Drawdown: ${sim2.maxDrawdownPct.toFixed(1)}%\n\n` +
+    `🏆 <b>${winner}</b> wins by $${formatMoney(diff)}`;
+
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.callback(`▶️ ${preset1.name}`, `etf:${etf1}`), Markup.button.callback(`▶️ ${preset2.name}`, `etf:${etf2}`)],
+    [Markup.button.callback("VOO vs BTC", "cmp:voo:btc"), Markup.button.callback("QQQ vs VTI", "cmp:qqq:vti")],
+    [Markup.button.callback("✕ Close", "close")]
+  ]);
+
+  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+});
+
+// Monthly mode toggle
+bot.command("monthly", async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  if (isRateLimited(userId)) return;
+
+  const cur = userState.get(userId) || clampParams({});
+  const newFreq = cur.frequency === "monthly" ? "weekly" : "monthly";
+  await renderCard(ctx, userId, { ...cur, frequency: newFreq });
 });
 
 // ETF commands - show list or simulate specific ETF
@@ -980,22 +1154,122 @@ bot.action("share", async (ctx) => {
   const shockPart = cur.shockPct !== null && cur.shockYear !== null ? ` shock ${cur.shockPct} at ${cur.shockYear}` : "";
   const cmd = `/dca ${cur.weeklyAmount} ${cur.years} ${cur.annualReturnPct}${feePart}${shockPart}`;
 
-  const shockInfo = cur.shockPct !== null ? `\nShock: ${cur.shockPct}% at year ${cur.shockYear}` : "";
-  const recoveryInfo = cur.shockPct !== null && sim.recoveryWeeks !== null ? ` (recovered in ${sim.recoveryWeeks} weeks)` : "";
+  const freqLabel = cur.frequency === "monthly" ? "month" : "week";
+  const shockInfo = cur.shockPct !== null ? ` with ${cur.shockPct}% crash` : "";
 
-  await ctx.reply(
-    `📊 DCA Simulation Results\n\n` +
-    `$${formatMoney(cur.weeklyAmount)}/week for ${cur.years} years at ${cur.annualReturnPct}%${shockInfo}${recoveryInfo}\n\n` +
+  // Twitter share text
+  const tweetText = encodeURIComponent(
+    `📈 If I invest $${formatMoney(cur.weeklyAmount)}/${freqLabel} for ${cur.years} years at ${cur.annualReturnPct}% return${shockInfo}:\n\n` +
+    `💰 Final: $${formatMoney(sim.finalValue)}\n` +
+    `✅ Gains: $${formatMoney(sim.gains)} (${roi}% ROI)\n\n` +
+    `Try it: t.me/dcashockbot`
+  );
+  const twitterUrl = `https://twitter.com/intent/tweet?text=${tweetText}`;
+
+  const msg =
+    `📊 <b>Share Your Simulation</b>\n\n` +
+    `$${formatMoney(cur.weeklyAmount)}/${freqLabel} for ${cur.years} years at ${cur.annualReturnPct}%${shockInfo}\n\n` +
     `💰 Contributed: $${formatMoney(sim.contributed)}\n` +
-    `📈 Final Value: $${formatMoney(sim.finalValue)}\n` +
+    `📈 Final: $${formatMoney(sim.finalValue)}\n` +
     `✅ Gains: $${formatMoney(sim.gains)} (${roi}% ROI)\n` +
     `📉 Max Drawdown: ${sim.maxDrawdownPct.toFixed(1)}%\n\n` +
-    `Command:\n${cmd}`
-  );
+    `<b>Command:</b>\n<code>${cmd}</code>`;
+
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.url("🐦 Share on Twitter", twitterUrl)],
+    [Markup.button.callback("✕ Close", "close")]
+  ]);
+
+  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
 
   try {
     await ctx.answerCbQuery();
   } catch {}
+});
+
+// Goal preset buttons
+bot.action(/^goal:(\d+)$/, async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  try { await ctx.answerCbQuery(); } catch {}
+
+  const target = Number(ctx.match[1]);
+  const years = 20;
+  const annualReturn = 10;
+
+  const weeks = years * 52;
+  const weeklyRate = Math.pow(1 + annualReturn / 100, 1 / 52) - 1;
+  const weeklyNeeded = target * weeklyRate / (Math.pow(1 + weeklyRate, weeks) - 1);
+  const monthlyNeeded = weeklyNeeded * 52 / 12;
+
+  const msg =
+    `🎯 <b>Goal: $${formatMoney(target)}</b>\n\n` +
+    `Timeline: <b>${years} years</b>\n` +
+    `Expected return: <b>${annualReturn}%</b>\n\n` +
+    `<b>You need to invest:</b>\n` +
+    `💵 $${formatMoney(weeklyNeeded)}/week\n` +
+    `💵 $${formatMoney(monthlyNeeded)}/month`;
+
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.callback("▶️ Simulate", `sim:${Math.round(weeklyNeeded)}:${years}:${annualReturn}`)],
+    [Markup.button.callback("✕ Close", "close")]
+  ]);
+
+  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+});
+
+// Simulate from goal
+bot.action(/^sim:(\d+):(\d+):(\d+)$/, async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  try { await ctx.answerCbQuery(); } catch {}
+
+  const weekly = Number(ctx.match[1]);
+  const years = Number(ctx.match[2]);
+  const ret = Number(ctx.match[3]);
+
+  await renderCard(ctx, userId, { weeklyAmount: weekly, years, annualReturnPct: ret, shockPct: null, shockYear: null });
+});
+
+// Compare preset buttons
+bot.action(/^cmp:(\w+):(\w+)$/, async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  try { await ctx.answerCbQuery(); } catch {}
+
+  const etf1 = ctx.match[1];
+  const etf2 = ctx.match[2];
+  const preset1 = ETF_PRESETS[etf1];
+  const preset2 = ETF_PRESETS[etf2];
+
+  if (!preset1 || !preset2) return;
+
+  const cur = userState.get(userId) || clampParams({});
+  const years = cur.years || 10;
+  const amount = cur.weeklyAmount || 100;
+
+  const sim1 = simulateDCA({ ...cur, annualReturnPct: preset1.annualReturnPct, annualFeePct: preset1.annualFeePct, shockPct: preset1.typicalShock, shockYear: 3 });
+  const sim2 = simulateDCA({ ...cur, annualReturnPct: preset2.annualReturnPct, annualFeePct: preset2.annualFeePct, shockPct: preset2.typicalShock, shockYear: 3 });
+
+  const roi1 = sim1.contributed > 0 ? ((sim1.gains / sim1.contributed) * 100).toFixed(1) : "0";
+  const roi2 = sim2.contributed > 0 ? ((sim2.gains / sim2.contributed) * 100).toFixed(1) : "0";
+
+  const winner = sim1.finalValue > sim2.finalValue ? preset1.name : preset2.name;
+  const diff = Math.abs(sim1.finalValue - sim2.finalValue);
+
+  const msg =
+    `⚖️ <b>${preset1.name} vs ${preset2.name}</b>\n` +
+    `$${formatMoney(amount)}/week for ${years} years\n\n` +
+    `<b>${preset1.name}</b>: $${formatMoney(sim1.finalValue)} (${roi1}% ROI)\n` +
+    `<b>${preset2.name}</b>: $${formatMoney(sim2.finalValue)} (${roi2}% ROI)\n\n` +
+    `🏆 ${winner} wins by $${formatMoney(diff)}`;
+
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.callback(`▶️ ${preset1.name}`, `etf:${etf1}`), Markup.button.callback(`▶️ ${preset2.name}`, `etf:${etf2}`)],
+    [Markup.button.callback("✕ Close", "close")]
+  ]);
+
+  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
 });
 
 // Catch-all so you always get some response
