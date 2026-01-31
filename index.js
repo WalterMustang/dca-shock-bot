@@ -577,7 +577,83 @@ async function renderCard(ctx, userId, params) {
 // Bot Commands
 // ─────────────────────────────────────────────────────────────────────────────
 
-bot.start(async (ctx) => ctx.reply("DCA Shock Bot. Type /help"));
+bot.start(async (ctx) => {
+  const name = ctx.from?.first_name || "there";
+  const msg =
+    `👋 Hey ${name}! Welcome to <b>DCA Shock Bot</b>\n\n` +
+    `📈 I help you visualize how <b>weekly investing</b> grows over time — and what happens when markets crash.\n\n` +
+    `<b>What is DCA?</b>\n` +
+    `Dollar Cost Averaging = investing a fixed amount every week/month, no matter the price. It's how most people build wealth.\n\n` +
+    `<b>Try it now:</b>\n` +
+    `→ Tap an ETF below to see a simulation\n` +
+    `→ Or type: /dca 100 10 7 (= $100/week, 10 years, 7% return)\n\n` +
+    `💡 <i>Tip: Use /etf to learn about different investment options</i>`;
+
+  const kb = Markup.inlineKeyboard([
+    [
+      Markup.button.callback("🇺🇸 VOO (S&P 500)", "etf:voo"),
+      Markup.button.callback("💻 QQQ (Tech)", "etf:qqq")
+    ],
+    [
+      Markup.button.callback("🌍 VTI (Total US)", "etf:vti"),
+      Markup.button.callback("₿ Bitcoin", "etf:btc")
+    ],
+    [
+      Markup.button.callback("📚 What are ETFs?", "showetf"),
+      Markup.button.callback("❓ Help", "showhelp")
+    ]
+  ]);
+
+  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+});
+
+bot.action("showetf", async (ctx) => {
+  try { await ctx.answerCbQuery(); } catch {}
+  // Trigger the /etf command logic
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  let msg = "📈 <b>What are ETFs?</b>\n";
+  msg += "ETFs (Exchange-Traded Funds) are baskets of stocks you can buy with one purchase. ";
+  msg += "Instead of picking individual stocks, you buy the whole market.\n\n";
+  msg += "<b>Popular ETFs for DCA investing:</b>\n\n";
+  for (const [key, etf] of Object.entries(ETF_PRESETS)) {
+    msg += `<b>/${key.toUpperCase()}</b> - ${etf.fullName}\n`;
+    msg += `📊 ${etf.annualReturnPct}% avg | 💰 ${etf.annualFeePct}% fee | 📉 ${etf.typicalShock}% crash\n`;
+    msg += `<i>${etf.description}</i>\n\n`;
+  }
+  msg += "⚠️ <i>Past performance ≠ future results.</i>";
+
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.callback("VOO", "etf:voo"), Markup.button.callback("QQQ", "etf:qqq"), Markup.button.callback("VTI", "etf:vti")],
+    [Markup.button.callback("VXUS", "etf:vxus"), Markup.button.callback("BND", "etf:bnd"), Markup.button.callback("BTC", "etf:btc")]
+  ]);
+
+  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+});
+
+bot.action("showhelp", async (ctx) => {
+  try { await ctx.answerCbQuery(); } catch {}
+  const msg =
+    "📊 <b>DCA Shock Bot - Help</b>\n\n" +
+    "<b>Basic command:</b>\n" +
+    "<code>/dca 100 10 8</code> = $100/week, 10 years, 8% return\n\n" +
+    "<b>With market crash:</b>\n" +
+    "<code>/dca 100 10 8 shock -30 at 3</code>\n= Same, but -30% crash at year 3\n\n" +
+    "<b>Quick ETF simulations:</b>\n" +
+    "/voo - S&P 500 (10.5% avg)\n" +
+    "/qqq - Nasdaq Tech (14% avg)\n" +
+    "/btc - Bitcoin (50% avg, very risky)\n\n" +
+    "<b>Buttons:</b> Adjust values without retyping\n" +
+    "<b>Share:</b> Export your results";
+
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.callback("▶️ Try VOO", "etf:voo"), Markup.button.callback("▶️ Try QQQ", "etf:qqq")]
+  ]);
+
+  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+});
+
 bot.command("ping", async (ctx) => ctx.reply("pong"));
 
 bot.command("help", async (ctx) => {
