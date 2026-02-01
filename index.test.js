@@ -75,8 +75,11 @@ test("escHtml escapes special characters", () => {
 });
 
 test("formatMoney formats numbers correctly", () => {
-  assert.strictEqual(formatMoney(1234), "1,234");
-  assert.strictEqual(formatMoney(1000000), "1,000,000");
+  assert.strictEqual(formatMoney(1234), "$1,234");
+  assert.strictEqual(formatMoney(1234, "usd"), "$1,234");
+  assert.strictEqual(formatMoney(1234, "eur"), "€1,234");
+  assert.strictEqual(formatMoney(1234, "chf"), "CHF 1,234");
+  assert.strictEqual(formatMoney(1000000), "$1,000,000");
   assert.strictEqual(formatMoney(NaN), "0");
   assert.strictEqual(formatMoney(Infinity), "0");
 });
