@@ -66,10 +66,10 @@ const ETF_PRESETS = {
   btc: {
     name: "BTC",
     fullName: "Bitcoin",
-    annualReturnPct: 50,
+    annualReturnPct: 20,
     annualFeePct: 0,
-    description: "Cryptocurrency. Extreme volatility - can 10x or drop 80%. High risk/reward.",
-    typicalShock: -70
+    description: "Cryptocurrency. Still volatile but maturing as an asset. Higher risk than stocks.",
+    typicalShock: -50
   }
 };
 
