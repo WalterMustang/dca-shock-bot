@@ -81,7 +81,8 @@ const DEFAULTS = {
   shockPct: null,
   shockYear: null,
   frequency: "weekly",  // "weekly" or "monthly"
-  inflationPct: 3       // for real return calculation
+  inflationPct: 3,      // for real return calculation
+  currency: "usd"       // "usd", "eur", or "chf"
 };
 
 const LIMITS = {
@@ -98,6 +99,13 @@ const RATE_LIMIT = {
   button: 350,
   cleanupInterval: 60_000,
   maxAge: 300_000
+};
+
+// Currency support
+const CURRENCIES = {
+  usd: { symbol: "$", name: "US Dollar", code: "USD" },
+  eur: { symbol: "€", name: "Euro", code: "EUR" },
+  chf: { symbol: "CHF ", name: "Swiss Franc", code: "CHF" }
 };
 
 // Log incoming messages (debug)
@@ -375,10 +383,12 @@ function simulateDCA(params) {
  * @param {number} x - Number to format
  * @returns {string} Formatted string (e.g., "1,234")
  */
-function formatMoney(x) {
+function formatMoney(x, currencyCode = "usd") {
   const n = Number(x);
   if (!Number.isFinite(n)) return "0";
-  return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const formatted = n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const currency = CURRENCIES[currencyCode] || CURRENCIES.usd;
+  return `${currency.symbol}${formatted}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -539,10 +549,11 @@ function keyboardFor(p) {
  */
 function buildCaption(sim) {
   const p = sim.params;
+  const curr = p.currency || "usd";
 
   const header = `<b>📈 DCA Shock Bot</b>`;
   const freqLabel = p.frequency === "monthly" ? "Monthly" : "Weekly";
-  const line1 = escHtml(`${freqLabel}: $${formatMoney(p.weeklyAmount)} | Years: ${p.years} | Return: ${p.annualReturnPct}%`);
+  const line1 = escHtml(`${freqLabel}: ${formatMoney(p.weeklyAmount, curr)} | Years: ${p.years} | Return: ${p.annualReturnPct}%`);
 
   const meta = [];
   if (p.annualFeePct > 0) meta.push(`Fee: ${p.annualFeePct}%`);
@@ -554,15 +565,15 @@ function buildCaption(sim) {
   const roi = sim.contributed > 0 ? ((sim.gains / sim.contributed) * 100).toFixed(1) : "0.0";
 
   const stats = [
-    `💰 Contributed: $${formatMoney(sim.contributed)}`,
-    `📈 Final: $${formatMoney(sim.finalValue)}`,
-    `✅ Gains: $${formatMoney(sim.gains)} (${roi}% ROI)`,
+    `💰 Contributed: ${formatMoney(sim.contributed, curr)}`,
+    `📈 Final: ${formatMoney(sim.finalValue, curr)}`,
+    `✅ Gains: ${formatMoney(sim.gains, curr)} (${roi}% ROI)`,
     `📉 Max drawdown: ${sim.maxDrawdownPct.toFixed(1)}%`
   ];
 
   // Add inflation-adjusted value
   if (sim.inflationAdjusted) {
-    stats.push(`💵 After ${p.inflationPct || 3}% inflation: $${formatMoney(sim.inflationAdjusted)}`);
+    stats.push(`💵 After ${p.inflationPct || 3}% inflation: ${formatMoney(sim.inflationAdjusted, curr)}`);
   }
 
   if (p.shockPct !== null && p.shockYear !== null) {
@@ -583,7 +594,7 @@ function buildCaption(sim) {
       keyYears.push(years[years.length - 1]);
     }
     const milestonesStr = keyYears
-      .map(y => `Yr${y}: $${formatMoney(sim.milestones[y])}`)
+      .map(y => `Yr${y}: ${formatMoney(sim.milestones[y], curr)}`)
       .join(" → ");
     stats.push(`📅 ${milestonesStr}`);
   }
@@ -810,15 +821,17 @@ bot.command("goal", async (ctx) => {
   }
 
   const monthlyNeeded = weeklyNeeded * 52 / 12;
+  const cur = userState.get(userId) || clampParams({});
+  const curr = cur.currency || "usd";
 
   const msg =
     `🎯 <b>Goal Calculator</b>\n\n` +
-    `Target: <b>$${formatMoney(target)}</b>\n` +
+    `Target: <b>${formatMoney(target, curr)}</b>\n` +
     `Timeline: <b>${years} years</b>\n` +
     `Expected return: <b>${annualReturn}%</b>\n\n` +
     `<b>You need to invest:</b>\n` +
-    `💵 $${formatMoney(weeklyNeeded)}/week\n` +
-    `💵 $${formatMoney(monthlyNeeded)}/month\n\n` +
+    `💵 ${formatMoney(weeklyNeeded, curr)}/week\n` +
+    `💵 ${formatMoney(monthlyNeeded, curr)}/month\n\n` +
     `<i>Tip: Try /dca ${Math.round(weeklyNeeded)} ${years} ${annualReturn} to simulate</i>`;
 
   const kb = Markup.inlineKeyboard([
@@ -851,6 +864,7 @@ bot.command("compare", async (ctx) => {
   const cur = userState.get(userId) || clampParams({});
   const years = cur.years || 10;
   const amount = cur.weeklyAmount || 100;
+  const curr = cur.currency || "usd";
 
   const sim1 = simulateDCA({ ...cur, annualReturnPct: preset1.annualReturnPct, annualFeePct: preset1.annualFeePct, shockPct: preset1.typicalShock, shockYear: 3 });
   const sim2 = simulateDCA({ ...cur, annualReturnPct: preset2.annualReturnPct, annualFeePct: preset2.annualFeePct, shockPct: preset2.typicalShock, shockYear: 3 });
@@ -863,14 +877,14 @@ bot.command("compare", async (ctx) => {
 
   const msg =
     `⚖️ <b>Compare: ${preset1.name} vs ${preset2.name}</b>\n` +
-    `$${formatMoney(amount)}/week for ${years} years\n\n` +
+    `${formatMoney(amount, curr)}/week for ${years} years\n\n` +
     `<b>${preset1.name}</b> (${preset1.annualReturnPct}% return)\n` +
-    `Final: $${formatMoney(sim1.finalValue)} | ROI: ${roi1}%\n` +
+    `Final: ${formatMoney(sim1.finalValue, curr)} | ROI: ${roi1}%\n` +
     `Drawdown: ${sim1.maxDrawdownPct.toFixed(1)}%\n\n` +
     `<b>${preset2.name}</b> (${preset2.annualReturnPct}% return)\n` +
-    `Final: $${formatMoney(sim2.finalValue)} | ROI: ${roi2}%\n` +
+    `Final: ${formatMoney(sim2.finalValue, curr)} | ROI: ${roi2}%\n` +
     `Drawdown: ${sim2.maxDrawdownPct.toFixed(1)}%\n\n` +
-    `🏆 <b>${winner}</b> wins by $${formatMoney(diff)}`;
+    `🏆 <b>${winner}</b> wins by ${formatMoney(diff, curr)}`;
 
   const kb = Markup.inlineKeyboard([
     [Markup.button.callback(`▶️ ${preset1.name}`, `etf:${etf1}`), Markup.button.callback(`▶️ ${preset2.name}`, `etf:${etf2}`)],
@@ -890,6 +904,31 @@ bot.command("monthly", async (ctx) => {
   const cur = userState.get(userId) || clampParams({});
   const newFreq = cur.frequency === "monthly" ? "weekly" : "monthly";
   await renderCard(ctx, userId, { ...cur, frequency: newFreq });
+});
+
+// Currency selection
+bot.command("currency", async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  if (isRateLimited(userId)) return;
+
+  const msg =
+    `💱 <b>Select Currency</b>\n\n` +
+    `Choose your preferred currency for displaying amounts:`;
+
+  const cur = userState.get(userId) || clampParams({});
+  const currentCurrency = cur.currency || "usd";
+
+  const kb = Markup.inlineKeyboard([
+    [
+      Markup.button.callback(currentCurrency === "usd" ? "✓ $ USD" : "$ USD", "cur:usd"),
+      Markup.button.callback(currentCurrency === "eur" ? "✓ € EUR" : "€ EUR", "cur:eur"),
+      Markup.button.callback(currentCurrency === "chf" ? "✓ CHF" : "CHF", "cur:chf")
+    ],
+    [Markup.button.callback("🏠 Menu", "home")]
+  ]);
+
+  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
 });
 
 // Portfolio Mix - combine multiple ETFs
@@ -959,6 +998,7 @@ bot.command("mix", async (ctx) => {
   });
 
   const roi = sim.contributed > 0 ? ((sim.gains / sim.contributed) * 100).toFixed(1) : "0";
+  const curr = cur.currency || "usd";
 
   const msg =
     `🎨 <b>Portfolio Mix</b>\n\n` +
@@ -966,10 +1006,10 @@ bot.command("mix", async (ctx) => {
     `📊 Blended return: ${blendedReturn}%\n` +
     `💰 Blended fee: ${blendedFee}%\n` +
     `📉 Blended crash: ${blendedShock}%\n\n` +
-    `<b>Simulation (${cur.years || 10} years, $${formatMoney(cur.weeklyAmount || 100)}/wk):</b>\n` +
-    `💵 Contributed: $${formatMoney(sim.contributed)}\n` +
-    `📈 Final: $${formatMoney(sim.finalValue)}\n` +
-    `✅ Gains: $${formatMoney(sim.gains)} (${roi}% ROI)\n` +
+    `<b>Simulation (${cur.years || 10} years, ${formatMoney(cur.weeklyAmount || 100, curr)}/wk):</b>\n` +
+    `💵 Contributed: ${formatMoney(sim.contributed, curr)}\n` +
+    `📈 Final: ${formatMoney(sim.finalValue, curr)}\n` +
+    `✅ Gains: ${formatMoney(sim.gains, curr)} (${roi}% ROI)\n` +
     `📉 Max drawdown: ${sim.maxDrawdownPct.toFixed(1)}%`;
 
   // Store the blended params for further adjustments
@@ -1087,6 +1127,45 @@ bot.action("noop", async (ctx) => {
   try {
     await ctx.answerCbQuery("Turn shock on first");
   } catch {}
+});
+
+// Currency selection handler
+bot.action(/^cur:(\w+)$/, async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const newCurrency = ctx.match[1];
+  if (!CURRENCIES[newCurrency]) {
+    try { await ctx.answerCbQuery("Unknown currency"); } catch {}
+    return;
+  }
+
+  const cur = userState.get(userId) || clampParams({});
+  userState.set(userId, { ...cur, currency: newCurrency });
+
+  const currencyInfo = CURRENCIES[newCurrency];
+  try { await ctx.answerCbQuery(`Switched to ${currencyInfo.name}`); } catch {}
+
+  // Update the message to show the new selection
+  const msg =
+    `💱 <b>Currency: ${currencyInfo.name}</b>\n\n` +
+    `All amounts will now be shown in ${currencyInfo.symbol}\n\n` +
+    `<i>Note: This is for display only - no conversion is applied.</i>`;
+
+  const kb = Markup.inlineKeyboard([
+    [
+      Markup.button.callback(newCurrency === "usd" ? "✓ $ USD" : "$ USD", "cur:usd"),
+      Markup.button.callback(newCurrency === "eur" ? "✓ € EUR" : "€ EUR", "cur:eur"),
+      Markup.button.callback(newCurrency === "chf" ? "✓ CHF" : "CHF", "cur:chf")
+    ],
+    [Markup.button.callback("🏠 Menu", "home")]
+  ]);
+
+  try {
+    await ctx.editMessageText(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+  } catch {
+    await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+  }
 });
 
 bot.action("close", async (ctx) => {
@@ -1291,6 +1370,7 @@ bot.action("share", async (ctx) => {
   // Run simulation to get actual results
   const sim = simulateDCA(cur);
   const roi = sim.contributed > 0 ? ((sim.gains / sim.contributed) * 100).toFixed(1) : "0.0";
+  const curr = cur.currency || "usd";
 
   const feePart = cur.annualFeePct > 0 ? ` fee ${cur.annualFeePct}` : "";
   const shockPart = cur.shockPct !== null && cur.shockYear !== null ? ` shock ${cur.shockPct} at ${cur.shockYear}` : "";
@@ -1301,19 +1381,19 @@ bot.action("share", async (ctx) => {
 
   // Twitter share text
   const tweetText = encodeURIComponent(
-    `📈 If I invest $${formatMoney(cur.weeklyAmount)}/${freqLabel} for ${cur.years} years at ${cur.annualReturnPct}% return${shockInfo}:\n\n` +
-    `💰 Final: $${formatMoney(sim.finalValue)}\n` +
-    `✅ Gains: $${formatMoney(sim.gains)} (${roi}% ROI)\n\n` +
+    `📈 If I invest ${formatMoney(cur.weeklyAmount, curr)}/${freqLabel} for ${cur.years} years at ${cur.annualReturnPct}% return${shockInfo}:\n\n` +
+    `💰 Final: ${formatMoney(sim.finalValue, curr)}\n` +
+    `✅ Gains: ${formatMoney(sim.gains, curr)} (${roi}% ROI)\n\n` +
     `Try it: t.me/dcashockbot`
   );
   const twitterUrl = `https://twitter.com/intent/tweet?text=${tweetText}`;
 
   const msg =
     `📊 <b>Share Your Simulation</b>\n\n` +
-    `$${formatMoney(cur.weeklyAmount)}/${freqLabel} for ${cur.years} years at ${cur.annualReturnPct}%${shockInfo}\n\n` +
-    `💰 Contributed: $${formatMoney(sim.contributed)}\n` +
-    `📈 Final: $${formatMoney(sim.finalValue)}\n` +
-    `✅ Gains: $${formatMoney(sim.gains)} (${roi}% ROI)\n` +
+    `${formatMoney(cur.weeklyAmount, curr)}/${freqLabel} for ${cur.years} years at ${cur.annualReturnPct}%${shockInfo}\n\n` +
+    `💰 Contributed: ${formatMoney(sim.contributed, curr)}\n` +
+    `📈 Final: ${formatMoney(sim.finalValue, curr)}\n` +
+    `✅ Gains: ${formatMoney(sim.gains, curr)} (${roi}% ROI)\n` +
     `📉 Max Drawdown: ${sim.maxDrawdownPct.toFixed(1)}%\n\n` +
     `<b>Command:</b>\n<code>${cmd}</code>`;
 
@@ -1338,6 +1418,8 @@ bot.action(/^goal:(\d+)$/, async (ctx) => {
   const target = Number(ctx.match[1]);
   const years = 20;
   const annualReturn = 10;
+  const cur = userState.get(userId) || clampParams({});
+  const curr = cur.currency || "usd";
 
   const weeks = years * 52;
   const weeklyRate = Math.pow(1 + annualReturn / 100, 1 / 52) - 1;
@@ -1345,12 +1427,12 @@ bot.action(/^goal:(\d+)$/, async (ctx) => {
   const monthlyNeeded = weeklyNeeded * 52 / 12;
 
   const msg =
-    `🎯 <b>Goal: $${formatMoney(target)}</b>\n\n` +
+    `🎯 <b>Goal: ${formatMoney(target, curr)}</b>\n\n` +
     `Timeline: <b>${years} years</b>\n` +
     `Expected return: <b>${annualReturn}%</b>\n\n` +
     `<b>You need to invest:</b>\n` +
-    `💵 $${formatMoney(weeklyNeeded)}/week\n` +
-    `💵 $${formatMoney(monthlyNeeded)}/month`;
+    `💵 ${formatMoney(weeklyNeeded, curr)}/week\n` +
+    `💵 ${formatMoney(monthlyNeeded, curr)}/month`;
 
   const kb = Markup.inlineKeyboard([
     [Markup.button.callback("▶️ Simulate", `sim:${Math.round(weeklyNeeded)}:${years}:${annualReturn}`)],
@@ -1389,6 +1471,7 @@ bot.action(/^cmp:(\w+):(\w+)$/, async (ctx) => {
   const cur = userState.get(userId) || clampParams({});
   const years = cur.years || 10;
   const amount = cur.weeklyAmount || 100;
+  const curr = cur.currency || "usd";
 
   const sim1 = simulateDCA({ ...cur, annualReturnPct: preset1.annualReturnPct, annualFeePct: preset1.annualFeePct, shockPct: preset1.typicalShock, shockYear: 3 });
   const sim2 = simulateDCA({ ...cur, annualReturnPct: preset2.annualReturnPct, annualFeePct: preset2.annualFeePct, shockPct: preset2.typicalShock, shockYear: 3 });
@@ -1401,10 +1484,10 @@ bot.action(/^cmp:(\w+):(\w+)$/, async (ctx) => {
 
   const msg =
     `⚖️ <b>${preset1.name} vs ${preset2.name}</b>\n` +
-    `$${formatMoney(amount)}/week for ${years} years\n\n` +
-    `<b>${preset1.name}</b>: $${formatMoney(sim1.finalValue)} (${roi1}% ROI)\n` +
-    `<b>${preset2.name}</b>: $${formatMoney(sim2.finalValue)} (${roi2}% ROI)\n\n` +
-    `🏆 ${winner} wins by $${formatMoney(diff)}`;
+    `${formatMoney(amount, curr)}/week for ${years} years\n\n` +
+    `<b>${preset1.name}</b>: ${formatMoney(sim1.finalValue, curr)} (${roi1}% ROI)\n` +
+    `<b>${preset2.name}</b>: ${formatMoney(sim2.finalValue, curr)} (${roi2}% ROI)\n\n` +
+    `🏆 ${winner} wins by ${formatMoney(diff, curr)}`;
 
   const kb = Markup.inlineKeyboard([
     [Markup.button.callback(`▶️ ${preset1.name}`, `etf:${etf1}`), Markup.button.callback(`▶️ ${preset2.name}`, `etf:${etf2}`)],
@@ -1455,6 +1538,7 @@ bot.action(/^mix:(\d+)(\w+)-(\d+)(\w+)(?:-(\d+)(\w+))?$/, async (ctx) => {
   const mixName = validAllocs.map(a => `${a.pct}% ${a.etf.name}`).join(" + ");
 
   const cur = userState.get(userId) || clampParams({});
+  const curr = cur.currency || "usd";
   const sim = simulateDCA({
     ...cur,
     annualReturnPct: blendedReturn,
@@ -1471,10 +1555,10 @@ bot.action(/^mix:(\d+)(\w+)-(\d+)(\w+)(?:-(\d+)(\w+))?$/, async (ctx) => {
     `📊 Blended return: ${blendedReturn}%\n` +
     `💰 Blended fee: ${blendedFee}%\n` +
     `📉 Blended crash: ${blendedShock}%\n\n` +
-    `<b>Simulation (${cur.years || 10} years, $${formatMoney(cur.weeklyAmount || 100)}/wk):</b>\n` +
-    `💵 Contributed: $${formatMoney(sim.contributed)}\n` +
-    `📈 Final: $${formatMoney(sim.finalValue)}\n` +
-    `✅ Gains: $${formatMoney(sim.gains)} (${roi}% ROI)\n` +
+    `<b>Simulation (${cur.years || 10} years, ${formatMoney(cur.weeklyAmount || 100, curr)}/wk):</b>\n` +
+    `💵 Contributed: ${formatMoney(sim.contributed, curr)}\n` +
+    `📈 Final: ${formatMoney(sim.finalValue, curr)}\n` +
+    `✅ Gains: ${formatMoney(sim.gains, curr)} (${roi}% ROI)\n` +
     `📉 Max drawdown: ${sim.maxDrawdownPct.toFixed(1)}%`;
 
   userState.set(userId, {
@@ -1526,19 +1610,19 @@ bot.action(/^mix:amt:([+-]\d+):(.+)$/, async (ctx) => {
   // Re-trigger the mix preset to refresh display
   // Parse mixShort back to allocations (e.g., "60voo-40bnd")
   const parts = mixShort.split("-");
-  const allocations = [];
+  const allocationsAmt = [];
   for (const part of parts) {
     const match = part.match(/^(\d+)(\w+)$/);
     if (match) {
       const etf = ETF_PRESETS[match[2]];
-      if (etf) allocations.push({ pct: Number(match[1]), etf, name: match[2] });
+      if (etf) allocationsAmt.push({ pct: Number(match[1]), etf, name: match[2] });
     }
   }
 
-  if (allocations.length === 0) return;
+  if (allocationsAmt.length === 0) return;
 
   let blendedReturn = 0, blendedFee = 0, blendedShock = 0;
-  allocations.forEach(a => {
+  allocationsAmt.forEach(a => {
     const weight = a.pct / 100;
     blendedReturn += a.etf.annualReturnPct * weight;
     blendedFee += a.etf.annualFeePct * weight;
@@ -1551,6 +1635,7 @@ bot.action(/^mix:amt:([+-]\d+):(.+)$/, async (ctx) => {
 
   const mixName = allocations.map(a => `${a.pct}% ${a.etf.name}`).join(" + ");
   const updatedCur = userState.get(userId);
+  const curr = updatedCur.currency || "usd";
 
   const sim = simulateDCA({
     ...updatedCur,
@@ -1568,16 +1653,16 @@ bot.action(/^mix:amt:([+-]\d+):(.+)$/, async (ctx) => {
     `📊 Blended return: ${blendedReturn}%\n` +
     `💰 Blended fee: ${blendedFee}%\n` +
     `📉 Blended crash: ${blendedShock}%\n\n` +
-    `<b>Simulation (${updatedCur.years || 10} years, $${formatMoney(updatedCur.weeklyAmount || 100)}/wk):</b>\n` +
-    `💵 Contributed: $${formatMoney(sim.contributed)}\n` +
-    `📈 Final: $${formatMoney(sim.finalValue)}\n` +
-    `✅ Gains: $${formatMoney(sim.gains)} (${roi}% ROI)\n` +
+    `<b>Simulation (${updatedCur.years || 10} years, ${formatMoney(updatedCur.weeklyAmount || 100, curr)}/wk):</b>\n` +
+    `💵 Contributed: ${formatMoney(sim.contributed, curr)}\n` +
+    `📈 Final: ${formatMoney(sim.finalValue, curr)}\n` +
+    `✅ Gains: ${formatMoney(sim.gains, curr)} (${roi}% ROI)\n` +
     `📉 Max drawdown: ${sim.maxDrawdownPct.toFixed(1)}%`;
 
   const kb = Markup.inlineKeyboard([
     [
-      Markup.button.callback("$-50/wk", `mix:amt:-50:${mixShort}`),
-      Markup.button.callback("$+50/wk", `mix:amt:+50:${mixShort}`),
+      Markup.button.callback("-50/wk", `mix:amt:-50:${mixShort}`),
+      Markup.button.callback("+50/wk", `mix:amt:+50:${mixShort}`),
       Markup.button.callback("Yrs -1", `mix:yrs:-1:${mixShort}`),
       Markup.button.callback("Yrs +1", `mix:yrs:+1:${mixShort}`)
     ],
@@ -1639,6 +1724,7 @@ bot.action(/^mix:yrs:([+-]\d+):(.+)$/, async (ctx) => {
 
   const mixName = allocations.map(a => `${a.pct}% ${a.etf.name}`).join(" + ");
   const updatedCur = userState.get(userId);
+  const curr = updatedCur.currency || "usd";
 
   const sim = simulateDCA({
     ...updatedCur,
@@ -1656,16 +1742,16 @@ bot.action(/^mix:yrs:([+-]\d+):(.+)$/, async (ctx) => {
     `📊 Blended return: ${blendedReturn}%\n` +
     `💰 Blended fee: ${blendedFee}%\n` +
     `📉 Blended crash: ${blendedShock}%\n\n` +
-    `<b>Simulation (${updatedCur.years || 10} years, $${formatMoney(updatedCur.weeklyAmount || 100)}/wk):</b>\n` +
-    `💵 Contributed: $${formatMoney(sim.contributed)}\n` +
-    `📈 Final: $${formatMoney(sim.finalValue)}\n` +
-    `✅ Gains: $${formatMoney(sim.gains)} (${roi}% ROI)\n` +
+    `<b>Simulation (${updatedCur.years || 10} years, ${formatMoney(updatedCur.weeklyAmount || 100, curr)}/wk):</b>\n` +
+    `💵 Contributed: ${formatMoney(sim.contributed, curr)}\n` +
+    `📈 Final: ${formatMoney(sim.finalValue, curr)}\n` +
+    `✅ Gains: ${formatMoney(sim.gains, curr)} (${roi}% ROI)\n` +
     `📉 Max drawdown: ${sim.maxDrawdownPct.toFixed(1)}%`;
 
   const kb = Markup.inlineKeyboard([
     [
-      Markup.button.callback("$-50/wk", `mix:amt:-50:${mixShort}`),
-      Markup.button.callback("$+50/wk", `mix:amt:+50:${mixShort}`),
+      Markup.button.callback("-50/wk", `mix:amt:-50:${mixShort}`),
+      Markup.button.callback("+50/wk", `mix:amt:+50:${mixShort}`),
       Markup.button.callback("Yrs -1", `mix:yrs:-1:${mixShort}`),
       Markup.button.callback("Yrs +1", `mix:yrs:+1:${mixShort}`)
     ],
