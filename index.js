@@ -506,8 +506,18 @@ function quickChartUrl(series) {
  * @param {object} p - Current parameters
  * @returns {object} Telegraf Markup keyboard
  */
-function keyboardFor(p) {
+function keyboardFor(p, options = {}) {
   const shockOn = p.shockPct !== null && p.shockYear !== null;
+  const { cta, hasSaved } = options;
+
+  const journeyRow = [];
+  if (cta?.label && cta?.action) {
+    journeyRow.push(Markup.button.callback(cta.label, cta.action));
+  }
+  journeyRow.push(Markup.button.callback("💾 Save (session)", "save"));
+  if (hasSaved) {
+    journeyRow.push(Markup.button.callback("▶️ Run Saved (temp)", "runsaved"));
+  }
 
   return Markup.inlineKeyboard([
     [
@@ -534,6 +544,7 @@ function keyboardFor(p) {
       Markup.button.callback("Pain", "preset:pain"),
       Markup.button.callback("Share", "share")
     ],
+    journeyRow.length > 0 ? journeyRow : [Markup.button.callback("💾 Save (session)", "save")],
     [
       Markup.button.callback("📚 ETFs", "showetf"),
       Markup.button.callback("❓ Help", "showhelp"),
@@ -599,21 +610,61 @@ function buildCaption(sim) {
     stats.push(`📅 ${milestonesStr}`);
   }
 
-  return [header, line1, line2, "", escHtml(stats.join("\n"))].join("\n");
+  const assumptions = [
+    "🧾 Assumptions: constant return, no taxes, fees as shown.",
+    "⚠️ Education only — not financial advice."
+  ];
+
+  return [header, line1, line2, "", escHtml(stats.join("\n")), "", escHtml(assumptions.join("\n"))].join("\n");
 }
 
 function stripHtml(html) {
   return String(html).replace(/<[^>]*>/g, "");
 }
 
-async function renderCard(ctx, userId, params) {
+function buildScenarioSummary(sim, curr, freqLabel) {
+  return `TL;DR: ${formatMoney(sim.params.weeklyAmount, curr)}/${freqLabel} for ${sim.params.years}y → ${formatMoney(sim.finalValue, curr)}.`;
+}
+
+function getJourneyCta(state) {
+  if (!state) return { label: "Next: Set a Goal", action: "journey:goal:1000000" };
+
+  if (state.lastSource === "mix") {
+    return { label: "Next: Set a Goal", action: "journey:goal:1000000" };
+  }
+
+  if (state.lastSource === "goal") {
+    return { label: "Next: Compare ETFs", action: "journey:compare:voo:qqq" };
+  }
+
+  if (state.lastSource === "compare") {
+    return { label: "Next: Set a Goal", action: "journey:goal:1000000" };
+  }
+
+  if (state.lastEtf) {
+    const other = state.lastEtf === "vti" ? "qqq" : "vti";
+    return { label: `Next: Compare vs ${other.toUpperCase()}`, action: `journey:compare:${state.lastEtf}:${other}` };
+  }
+
+  return { label: "Next: Set a Goal", action: "journey:goal:1000000" };
+}
+
+async function renderCard(ctx, userId, params, context = {}) {
   const p = clampParams(params);
-  userState.set(userId, p);
+  const existing = userState.get(userId) || {};
+  const nextState = {
+    ...existing,
+    ...p,
+    lastSource: context.source || existing.lastSource,
+    lastEtf: context.etfKey || existing.lastEtf
+  };
+  userState.set(userId, nextState);
 
   const sim = simulateDCA(p);
   const chart = quickChartUrl(sim.series);
   const caption = buildCaption(sim);
-  const kb = keyboardFor(p);
+  const cta = getJourneyCta(nextState);
+  const kb = keyboardFor(p, { cta, hasSaved: Boolean(nextState.savedScenario) });
 
   // Callback query: edit existing message if possible
   if (ctx.updateType === "callback_query") {
@@ -766,7 +817,7 @@ bot.command("dca", async (ctx) => {
 
   try {
     const params = parseDcaCommand(ctx.message?.text || "/dca");
-    await renderCard(ctx, userId, params);
+    await renderCard(ctx, userId, params, { source: "dca" });
   } catch (e) {
     console.error("DCA ERROR FULL:", e);
     await ctx.reply("Error running sim. Try /help");
@@ -778,38 +829,24 @@ bot.command("base", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
   if (isRateLimited(userId)) return;
-  await renderCard(ctx, userId, PRESETS.base);
+  await renderCard(ctx, userId, PRESETS.base, { source: "preset" });
 });
 
 bot.command("bull", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
   if (isRateLimited(userId)) return;
-  await renderCard(ctx, userId, PRESETS.bull);
+  await renderCard(ctx, userId, PRESETS.bull, { source: "preset" });
 });
 
 bot.command("pain", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
   if (isRateLimited(userId)) return;
-  await renderCard(ctx, userId, PRESETS.pain);
+  await renderCard(ctx, userId, PRESETS.pain, { source: "preset" });
 });
 
-// Goal Calculator - reverse DCA: how much to invest to reach a goal
-bot.command("goal", async (ctx) => {
-  const userId = ctx.from?.id;
-  if (!userId) return;
-  if (isRateLimited(userId)) return;
-
-  const args = (ctx.message?.text || "").trim().split(/\s+/);
-  // /goal <target> <years> <return%>
-  const target = toNum(args[1], 1000000);
-  const years = toNum(args[2], 20);
-  const annualReturn = toNum(args[3], 10);
-
-  // Calculate required weekly contribution using future value of annuity formula
-  // FV = PMT * [((1 + r)^n - 1) / r]
-  // PMT = FV * r / ((1 + r)^n - 1)
+function sendGoal(ctx, userId, target, years, annualReturn) {
   const weeks = years * 52;
   const weeklyRate = Math.pow(1 + annualReturn / 100, 1 / 52) - 1;
 
@@ -840,25 +877,32 @@ bot.command("goal", async (ctx) => {
     [Markup.button.callback("✕ Close", "close")]
   ]);
 
-  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
-});
+  return ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+}
 
-// Compare two ETFs/scenarios side by side
-bot.command("compare", async (ctx) => {
+// Goal Calculator - reverse DCA: how much to invest to reach a goal
+bot.command("goal", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
   if (isRateLimited(userId)) return;
 
   const args = (ctx.message?.text || "").trim().split(/\s+/);
-  const etf1 = args[1]?.toLowerCase() || "voo";
-  const etf2 = args[2]?.toLowerCase() || "qqq";
+  // /goal <target> <years> <return%>
+  const target = toNum(args[1], 1000000);
+  const years = toNum(args[2], 20);
+  const annualReturn = toNum(args[3], 10);
 
+  await sendGoal(ctx, userId, target, years, annualReturn);
+  const cur = userState.get(userId) || clampParams({});
+  userState.set(userId, { ...cur, lastSource: "goal" });
+});
+
+function sendCompare(ctx, userId, etf1, etf2) {
   const preset1 = ETF_PRESETS[etf1];
   const preset2 = ETF_PRESETS[etf2];
 
   if (!preset1 || !preset2) {
-    await ctx.reply("Usage: /compare voo qqq\nAvailable: voo, qqq, vti, vxus, bnd, btc");
-    return;
+    return ctx.reply("Usage: /compare voo qqq\nAvailable: voo, qqq, vti, vxus, bnd, btc");
   }
 
   const cur = userState.get(userId) || clampParams({});
@@ -892,7 +936,22 @@ bot.command("compare", async (ctx) => {
     [Markup.button.callback("✕ Close", "close")]
   ]);
 
-  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+  return ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+}
+
+// Compare two ETFs/scenarios side by side
+bot.command("compare", async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  if (isRateLimited(userId)) return;
+
+  const args = (ctx.message?.text || "").trim().split(/\s+/);
+  const etf1 = args[1]?.toLowerCase() || "voo";
+  const etf2 = args[2]?.toLowerCase() || "qqq";
+
+  await sendCompare(ctx, userId, etf1, etf2);
+  const cur = userState.get(userId) || clampParams({});
+  userState.set(userId, { ...cur, lastSource: "compare" });
 });
 
 // Monthly mode toggle
@@ -903,7 +962,7 @@ bot.command("monthly", async (ctx) => {
 
   const cur = userState.get(userId) || clampParams({});
   const newFreq = cur.frequency === "monthly" ? "weekly" : "monthly";
-  await renderCard(ctx, userId, { ...cur, frequency: newFreq });
+  await renderCard(ctx, userId, { ...cur, frequency: newFreq }, { source: "monthly" });
 });
 
 // Currency selection
@@ -1042,6 +1101,8 @@ bot.command("mix", async (ctx) => {
   ]);
 
   await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+  const curState = userState.get(userId) || clampParams({});
+  userState.set(userId, { ...curState, lastSource: "mix" });
 });
 
 // ETF commands - show list or simulate specific ETF
@@ -1063,7 +1124,7 @@ bot.command("etf", async (ctx) => {
       annualFeePct: etf.annualFeePct,
       shockPct: etf.typicalShock,
       shockYear: Math.min(cur.years || 10, 3)
-    });
+    }, { source: "etf", etfKey: etfName });
     return;
   }
 
@@ -1115,7 +1176,7 @@ for (const etfKey of Object.keys(ETF_PRESETS)) {
       annualFeePct: etf.annualFeePct,
       shockPct: etf.typicalShock,
       shockYear: Math.min(cur.years || 10, 3)
-    });
+    }, { source: "etf", etfKey });
   });
 }
 
@@ -1241,7 +1302,7 @@ bot.action("home", async (ctx) => {
 bot.action("run:default", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
-  await renderCard(ctx, userId, PRESETS.base);
+  await renderCard(ctx, userId, PRESETS.base, { source: "preset" });
 });
 
 bot.action(/^preset:(.+)$/, async (ctx) => {
@@ -1250,7 +1311,7 @@ bot.action(/^preset:(.+)$/, async (ctx) => {
 
   const preset = PRESETS[ctx.match[1]];
   if (preset) {
-    return renderCard(ctx, userId, preset);
+    return renderCard(ctx, userId, preset, { source: "preset" });
   }
 
   try {
@@ -1277,7 +1338,7 @@ bot.action(/^etf:(.+)$/, async (ctx) => {
     annualFeePct: etf.annualFeePct,
     shockPct: etf.typicalShock,
     shockYear: Math.min(cur.years || 10, 3)
-  });
+  }, { source: "etf", etfKey });
 });
 
 bot.action(/^years:([+-]\d+)$/, async (ctx) => {
@@ -1380,8 +1441,10 @@ bot.action("share", async (ctx) => {
   const shockInfo = cur.shockPct !== null ? ` with ${cur.shockPct}% crash` : "";
 
   // Twitter share text
+  const summaryLine = buildScenarioSummary(sim, curr, freqLabel);
   const tweetText = encodeURIComponent(
     `📈 If I invest ${formatMoney(cur.weeklyAmount, curr)}/${freqLabel} for ${cur.years} years at ${cur.annualReturnPct}% return${shockInfo}:\n\n` +
+    `${summaryLine}\n\n` +
     `💰 Final: ${formatMoney(sim.finalValue, curr)}\n` +
     `✅ Gains: ${formatMoney(sim.gains, curr)} (${roi}% ROI)\n\n` +
     `Try it: t.me/dcashockbot`
@@ -1390,6 +1453,7 @@ bot.action("share", async (ctx) => {
 
   const msg =
     `📊 <b>Share Your Simulation</b>\n\n` +
+    `${summaryLine}\n\n` +
     `${formatMoney(cur.weeklyAmount, curr)}/${freqLabel} for ${cur.years} years at ${cur.annualReturnPct}%${shockInfo}\n\n` +
     `💰 Contributed: ${formatMoney(sim.contributed, curr)}\n` +
     `📈 Final: ${formatMoney(sim.finalValue, curr)}\n` +
@@ -1409,6 +1473,57 @@ bot.action("share", async (ctx) => {
   } catch {}
 });
 
+bot.action("save", async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const cur = userState.get(userId);
+  if (!cur) {
+    try { await ctx.answerCbQuery("Run a sim first"); } catch {}
+    return;
+  }
+
+  const { savedScenario, lastSource, lastEtf, ...params } = cur;
+  userState.set(userId, { ...cur, savedScenario: { ...params } });
+
+  try { await ctx.answerCbQuery("Saved for this session only"); } catch {}
+});
+
+bot.action("runsaved", async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const cur = userState.get(userId);
+  if (!cur?.savedScenario) {
+    try { await ctx.answerCbQuery("No saved scenario"); } catch {}
+    return;
+  }
+
+  await renderCard(ctx, userId, cur.savedScenario, { source: "saved" });
+});
+
+bot.action(/^journey:compare:(\w+):(\w+)$/, async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  try { await ctx.answerCbQuery(); } catch {}
+
+  const etf1 = ctx.match[1];
+  const etf2 = ctx.match[2];
+  await sendCompare(ctx, userId, etf1, etf2);
+  const cur = userState.get(userId) || clampParams({});
+  userState.set(userId, { ...cur, lastSource: "compare" });
+});
+
+bot.action(/^journey:goal:(\d+)$/, async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  try { await ctx.answerCbQuery(); } catch {}
+
+  await sendGoal(ctx, userId, Number(ctx.match[1]), 20, 10);
+  const cur = userState.get(userId) || clampParams({});
+  userState.set(userId, { ...cur, lastSource: "goal" });
+});
+
 // Goal preset buttons
 bot.action(/^goal:(\d+)$/, async (ctx) => {
   const userId = ctx.from?.id;
@@ -1418,28 +1533,9 @@ bot.action(/^goal:(\d+)$/, async (ctx) => {
   const target = Number(ctx.match[1]);
   const years = 20;
   const annualReturn = 10;
+  await sendGoal(ctx, userId, target, years, annualReturn);
   const cur = userState.get(userId) || clampParams({});
-  const curr = cur.currency || "usd";
-
-  const weeks = years * 52;
-  const weeklyRate = Math.pow(1 + annualReturn / 100, 1 / 52) - 1;
-  const weeklyNeeded = target * weeklyRate / (Math.pow(1 + weeklyRate, weeks) - 1);
-  const monthlyNeeded = weeklyNeeded * 52 / 12;
-
-  const msg =
-    `🎯 <b>Goal: ${formatMoney(target, curr)}</b>\n\n` +
-    `Timeline: <b>${years} years</b>\n` +
-    `Expected return: <b>${annualReturn}%</b>\n\n` +
-    `<b>You need to invest:</b>\n` +
-    `💵 ${formatMoney(weeklyNeeded, curr)}/week\n` +
-    `💵 ${formatMoney(monthlyNeeded, curr)}/month`;
-
-  const kb = Markup.inlineKeyboard([
-    [Markup.button.callback("▶️ Simulate", `sim:${Math.round(weeklyNeeded)}:${years}:${annualReturn}`)],
-    [Markup.button.callback("✕ Close", "close")]
-  ]);
-
-  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+  userState.set(userId, { ...cur, lastSource: "goal" });
 });
 
 // Simulate from goal
@@ -1452,7 +1548,7 @@ bot.action(/^sim:(\d+):(\d+):(\d+)$/, async (ctx) => {
   const years = Number(ctx.match[2]);
   const ret = Number(ctx.match[3]);
 
-  await renderCard(ctx, userId, { weeklyAmount: weekly, years, annualReturnPct: ret, shockPct: null, shockYear: null });
+  await renderCard(ctx, userId, { weeklyAmount: weekly, years, annualReturnPct: ret, shockPct: null, shockYear: null }, { source: "goal" });
 });
 
 // Compare preset buttons
@@ -1463,38 +1559,9 @@ bot.action(/^cmp:(\w+):(\w+)$/, async (ctx) => {
 
   const etf1 = ctx.match[1];
   const etf2 = ctx.match[2];
-  const preset1 = ETF_PRESETS[etf1];
-  const preset2 = ETF_PRESETS[etf2];
-
-  if (!preset1 || !preset2) return;
-
+  await sendCompare(ctx, userId, etf1, etf2);
   const cur = userState.get(userId) || clampParams({});
-  const years = cur.years || 10;
-  const amount = cur.weeklyAmount || 100;
-  const curr = cur.currency || "usd";
-
-  const sim1 = simulateDCA({ ...cur, annualReturnPct: preset1.annualReturnPct, annualFeePct: preset1.annualFeePct, shockPct: preset1.typicalShock, shockYear: 3 });
-  const sim2 = simulateDCA({ ...cur, annualReturnPct: preset2.annualReturnPct, annualFeePct: preset2.annualFeePct, shockPct: preset2.typicalShock, shockYear: 3 });
-
-  const roi1 = sim1.contributed > 0 ? ((sim1.gains / sim1.contributed) * 100).toFixed(1) : "0";
-  const roi2 = sim2.contributed > 0 ? ((sim2.gains / sim2.contributed) * 100).toFixed(1) : "0";
-
-  const winner = sim1.finalValue > sim2.finalValue ? preset1.name : preset2.name;
-  const diff = Math.abs(sim1.finalValue - sim2.finalValue);
-
-  const msg =
-    `⚖️ <b>${preset1.name} vs ${preset2.name}</b>\n` +
-    `${formatMoney(amount, curr)}/week for ${years} years\n\n` +
-    `<b>${preset1.name}</b>: ${formatMoney(sim1.finalValue, curr)} (${roi1}% ROI)\n` +
-    `<b>${preset2.name}</b>: ${formatMoney(sim2.finalValue, curr)} (${roi2}% ROI)\n\n` +
-    `🏆 ${winner} wins by ${formatMoney(diff, curr)}`;
-
-  const kb = Markup.inlineKeyboard([
-    [Markup.button.callback(`▶️ ${preset1.name}`, `etf:${etf1}`), Markup.button.callback(`▶️ ${preset2.name}`, `etf:${etf2}`)],
-    [Markup.button.callback("✕ Close", "close")]
-  ]);
-
-  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+  userState.set(userId, { ...cur, lastSource: "compare" });
 });
 
 // Portfolio Mix preset buttons
@@ -1786,7 +1853,7 @@ bot.action(/^mix:run:(.+)$/, async (ctx) => {
   }
 
   // Render full simulation card with the blended params
-  await renderCard(ctx, userId, cur);
+  await renderCard(ctx, userId, cur, { source: "mix" });
 });
 
 // Catch-all so you always get some response
