@@ -13,6 +13,7 @@ const {
   clampParams,
   simulateDCA,
   parseDcaCommand,
+  parseCompareCommand,
   formatMoney
 } = require("./index.js");
 
@@ -360,6 +361,27 @@ test("parseDcaCommand handles invalid input gracefully", () => {
   const result = parseDcaCommand("/dca abc xyz");
   assert.strictEqual(result.weeklyAmount, DEFAULTS.weeklyAmount);
   assert.strictEqual(result.years, DEFAULTS.years);
+});
+
+test("parseCompareCommand parses ETF compare", () => {
+  const result = parseCompareCommand("/compare voo qqq");
+  assert.strictEqual(result.kind, "etf");
+  assert.strictEqual(result.etf1, "voo");
+  assert.strictEqual(result.etf2, "qqq");
+});
+
+test("parseCompareCommand parses scenario compare", () => {
+  const result = parseCompareCommand("/compare 100 10 8 vs 100 10 12");
+  assert.strictEqual(result.kind, "scenario");
+  assert.strictEqual(result.left.weeklyAmount, 100);
+  assert.strictEqual(result.left.years, 10);
+  assert.strictEqual(result.left.annualReturnPct, 8);
+  assert.strictEqual(result.right.annualReturnPct, 12);
+});
+
+test("parseCompareCommand rejects invalid syntax", () => {
+  const result = parseCompareCommand("/compare 100 10 vs");
+  assert.strictEqual(result.kind, "invalid");
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

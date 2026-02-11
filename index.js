@@ -441,6 +441,55 @@ function parseDcaCommand(text) {
   return clampParams({ weeklyAmount, years, annualReturnPct, annualFeePct, shockPct, shockYear });
 }
 
+/**
+ * Parse /compare command into either ETF comparison or custom scenario comparison.
+ *
+ * Supported formats:
+ * - /compare voo qqq
+ * - /compare 100 10 8 vs 100 10 12
+ *
+ * @param {string} text - Command text
+ * @returns {{kind: "etf", etf1: string, etf2: string} | {kind: "scenario", left: object, right: object} | {kind: "invalid"}}
+ */
+function parseCompareCommand(text) {
+  const raw = String(text || "").trim();
+  const parts = raw.split(/\s+/);
+
+  // /compare <etf1> <etf2>
+  if (parts.length >= 3 && !parts.includes("vs")) {
+    return {
+      kind: "etf",
+      etf1: String(parts[1] || "voo").toLowerCase(),
+      etf2: String(parts[2] || "qqq").toLowerCase()
+    };
+  }
+
+  const vsIndex = parts.findIndex((p) => p.toLowerCase() === "vs");
+  if (vsIndex <= 1 || vsIndex >= parts.length - 1) {
+    return { kind: "invalid" };
+  }
+
+  const leftArgs = parts.slice(1, vsIndex);
+  const rightArgs = parts.slice(vsIndex + 1);
+
+  if (leftArgs.length < 3 || rightArgs.length < 3) {
+    return { kind: "invalid" };
+  }
+
+  const left = clampParams({
+    weeklyAmount: toNum(leftArgs[0], DEFAULTS.weeklyAmount),
+    years: toNum(leftArgs[1], DEFAULTS.years),
+    annualReturnPct: toNum(leftArgs[2], DEFAULTS.annualReturnPct)
+  });
+  const right = clampParams({
+    weeklyAmount: toNum(rightArgs[0], DEFAULTS.weeklyAmount),
+    years: toNum(rightArgs[1], DEFAULTS.years),
+    annualReturnPct: toNum(rightArgs[2], DEFAULTS.annualReturnPct)
+  });
+
+  return { kind: "scenario", left, right };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Chart Generation
 // ─────────────────────────────────────────────────────────────────────────────
@@ -495,6 +544,68 @@ function quickChartUrl(series) {
 
   const encoded = encodeURIComponent(JSON.stringify(cfg));
   return `https://quickchart.io/chart?c=${encoded}&w=600&h=400&bkg=white`;
+}
+
+/**
+ * Generate two-line comparison chart URL.
+ * @param {number[]} leftSeries
+ * @param {number[]} rightSeries
+ * @param {string} leftLabel
+ * @param {string} rightLabel
+ * @returns {string}
+ */
+function quickCompareChartUrl(leftSeries, rightSeries, leftLabel, rightLabel) {
+  const maxLen = Math.max(leftSeries.length, rightSeries.length, 1);
+  const maxPoints = 100;
+  const step = Math.max(1, Math.floor(maxLen / maxPoints));
+
+  const labels = [];
+  const sampledLeft = [];
+  const sampledRight = [];
+
+  for (let i = 0; i < maxLen; i += step) {
+    labels.push("");
+    sampledLeft.push(i < leftSeries.length ? Math.round(leftSeries[i]) : null);
+    sampledRight.push(i < rightSeries.length ? Math.round(rightSeries[i]) : null);
+  }
+
+  const cfg = {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: leftLabel,
+          data: sampledLeft,
+          pointRadius: 0,
+          borderWidth: 3,
+          borderColor: "#0066CC",
+          fill: false
+        },
+        {
+          label: rightLabel,
+          data: sampledRight,
+          pointRadius: 0,
+          borderWidth: 3,
+          borderColor: "#FF3B30",
+          fill: false
+        }
+      ]
+    },
+    options: {
+      title: {
+        display: true,
+        text: "Scenario Comparison"
+      },
+      scales: {
+        xAxes: [{ display: false }],
+        yAxes: [{ ticks: { beginAtZero: true } }]
+      }
+    }
+  };
+
+  const encoded = encodeURIComponent(JSON.stringify(cfg));
+  return `https://quickchart.io/chart?c=${encoded}&w=700&h=420&bkg=white`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -799,7 +910,8 @@ bot.command("help", async (ctx) => {
     "/voo /qqq /vti /btc - Quick simulate\n\n" +
     "<b>Tools:</b>\n" +
     "/goal 1000000 20 10 - How much to invest for $1M?\n" +
-    "/compare voo qqq - Compare two ETFs\n\n" +
+    "/compare voo qqq - Compare two ETFs\n" +
+    "/compare 100 10 8 vs 100 10 12 - Compare 2 custom scenarios\n\n" +
     "<b>ETF Returns:</b>\n" +
     "VOO 10.5% | QQQ 14% | VTI 10% | BTC 50%";
   const kb = Markup.inlineKeyboard([
@@ -939,17 +1051,63 @@ function sendCompare(ctx, userId, etf1, etf2) {
   return ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
 }
 
+function sendScenarioCompare(ctx, userId, leftParams, rightParams) {
+  const cur = userState.get(userId) || clampParams({});
+  const curr = cur.currency || "usd";
+
+  const left = simulateDCA({ ...cur, ...leftParams });
+  const right = simulateDCA({ ...cur, ...rightParams });
+
+  const leftRoi = left.contributed > 0 ? ((left.gains / left.contributed) * 100).toFixed(1) : "0.0";
+  const rightRoi = right.contributed > 0 ? ((right.gains / right.contributed) * 100).toFixed(1) : "0.0";
+
+  const winner = left.finalValue >= right.finalValue ? "Scenario A" : "Scenario B";
+  const diff = Math.abs(left.finalValue - right.finalValue);
+
+  const leftLabel = `A (${left.params.annualReturnPct}%)`;
+  const rightLabel = `B (${right.params.annualReturnPct}%)`;
+  const chart = quickCompareChartUrl(left.series, right.series, leftLabel, rightLabel);
+
+  const msg =
+    `⚖️ <b>Scenario Compare</b>\n` +
+    `A: ${formatMoney(left.params.weeklyAmount, curr)}/wk, ${left.params.years}y, ${left.params.annualReturnPct}%\n` +
+    `B: ${formatMoney(right.params.weeklyAmount, curr)}/wk, ${right.params.years}y, ${right.params.annualReturnPct}%\n\n` +
+    `<b>Scenario A</b>\n` +
+    `Final: ${formatMoney(left.finalValue, curr)} | ROI: ${leftRoi}%\n` +
+    `Drawdown: ${left.maxDrawdownPct.toFixed(1)}%\n\n` +
+    `<b>Scenario B</b>\n` +
+    `Final: ${formatMoney(right.finalValue, curr)} | ROI: ${rightRoi}%\n` +
+    `Drawdown: ${right.maxDrawdownPct.toFixed(1)}%\n\n` +
+    `🏆 <b>${winner}</b> ahead by ${formatMoney(diff, curr)}`;
+
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.callback("▶️ Run Scenario A", `sim:${Math.round(left.params.weeklyAmount)}:${left.params.years}:${left.params.annualReturnPct}`)],
+    [Markup.button.callback("▶️ Run Scenario B", `sim:${Math.round(right.params.weeklyAmount)}:${right.params.years}:${right.params.annualReturnPct}`)],
+    [Markup.button.callback("✕ Close", "close")]
+  ]);
+
+  return ctx.replyWithPhoto(chart, { caption: msg, parse_mode: "HTML", reply_markup: kb.reply_markup });
+}
+
 // Compare two ETFs/scenarios side by side
 bot.command("compare", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
   if (isRateLimited(userId)) return;
 
-  const args = (ctx.message?.text || "").trim().split(/\s+/);
-  const etf1 = args[1]?.toLowerCase() || "voo";
-  const etf2 = args[2]?.toLowerCase() || "qqq";
+  const parsed = parseCompareCommand(ctx.message?.text || "/compare voo qqq");
 
-  await sendCompare(ctx, userId, etf1, etf2);
+  if (parsed.kind === "etf") {
+    await sendCompare(ctx, userId, parsed.etf1, parsed.etf2);
+  } else if (parsed.kind === "scenario") {
+    await sendScenarioCompare(ctx, userId, parsed.left, parsed.right);
+  } else {
+    await ctx.reply(
+      "Usage:\n/compare voo qqq\n/compare 100 10 8 vs 100 10 12\n\nAvailable ETFs: voo, qqq, vti, vxus, bnd, btc"
+    );
+    return;
+  }
+
   const cur = userState.get(userId) || clampParams({});
   userState.set(userId, { ...cur, lastSource: "compare" });
 });
@@ -1929,5 +2087,6 @@ module.exports = {
 
   // Parsing
   parseDcaCommand,
+  parseCompareCommand,
   formatMoney
 };
