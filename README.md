@@ -74,6 +74,8 @@ docker run -e BOT_TOKEN="your-token" dca-shock-bot
 | `/base` | Preset: $100/wk, 10yr, 7%, -30% shock at year 3 |
 | `/bull` | Preset: $100/wk, 10yr, 12%, no shock |
 | `/pain` | Preset: $100/wk, 10yr, 7%, -50% shock at year 2 |
+| `/compare <etf1> <etf2>` | Compare two ETF presets side-by-side |
+| `/compare <w1> <y1> <r1> vs <w2> <y2> <r2>` | Compare two custom scenarios |
 | `/ping` | Health check |
 
 ### ETF Presets
@@ -111,6 +113,13 @@ Quick commands to simulate popular ETFs with their historical average returns:
 
 # Higher contributions
 /dca 500 20 10 shock -40 at 5
+
+# Compare two ETF presets
+/compare voo qqq
+
+# Compare two custom scenarios
+/compare 100 10 8 vs 100 10 12
+
 ```
 
 ### Interactive Buttons
