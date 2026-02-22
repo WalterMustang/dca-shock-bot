@@ -209,6 +209,62 @@ dca-shock-bot/
 - **Charts**: [QuickChart.io](https://quickchart.io)
 - **Deployment**: Docker / Railway / Any Node.js host
 
+## Railway → Render Migration (Step-by-Step)
+
+This bot currently runs with **long polling** (not Telegram webhook mode), so the easiest Render setup is a **Background Worker**.
+
+### 1) Prepare your repo
+
+1. Push your latest code to GitHub.
+2. Confirm your `Dockerfile` is present (it is in this project).
+3. Make sure you have your Telegram `BOT_TOKEN` from [@BotFather](https://t.me/BotFather).
+
+### 2) Create a Render Background Worker
+
+1. Log in to Render.
+2. Click **New +** → **Background Worker**.
+3. Connect your GitHub repository.
+4. Select the branch you want to deploy.
+
+### 3) Configure build/start
+
+If using Docker (recommended for this repo):
+
+- **Environment**: `Docker`
+- **Dockerfile Path**: `./Dockerfile`
+- **Start Command**: leave empty (Docker `CMD ["npm", "start"]` is already defined)
+
+If using Native Node instead of Docker:
+
+- **Build Command**: `npm install --omit=dev`
+- **Start Command**: `npm start`
+
+### 4) Add environment variables
+
+In Render service settings, add:
+
+- `BOT_TOKEN` = your real Telegram bot token (required)
+- `NODE_ENV` = `production` (optional but recommended)
+
+### 5) Deploy
+
+1. Click **Create Background Worker** / **Deploy**.
+2. Open Render logs and verify you see a successful start (for example: bot launch message).
+3. In Telegram, send `/start` to your bot and confirm it replies.
+
+### 6) Disable Railway service
+
+After Render is confirmed working:
+
+1. Stop/suspend your Railway deployment.
+2. Keep only one active deployment to avoid confusion and duplicate maintenance.
+
+### Notes / Troubleshooting
+
+- Long polling bots should run as **Background Worker**, not **Web Service**.
+- If your Render free tier sleeps or does not support always-on worker behavior, bot responses can be delayed while waking up.
+- If you decide to use Render Web Service later, you must refactor the bot to Telegram webhook mode (HTTP server + webhook route).
+
 ## License
 
 MIT License - feel free to use, modify, and distribute.
