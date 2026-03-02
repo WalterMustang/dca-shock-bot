@@ -2,7 +2,7 @@
 
 A Telegram bot that simulates Dollar Cost Averaging (DCA) investment strategies with market shock modeling. Visualize how your weekly investments could grow over time, and see the impact of market crashes on your portfolio.
 
-![Node.js](https://img.shields.io/badge/Node.js-18%2B-green)
+![Node.js](https://img.shields.io/badge/Node.js-20_LTS-green)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 ![Telegram Bot](https://img.shields.io/badge/Telegram-Bot-blue)
 
@@ -31,7 +31,7 @@ A Telegram bot that simulates Dollar Cost Averaging (DCA) investment strategies 
 ## Installation
 
 ### Prerequisites
-- Node.js 18 or higher
+- Node.js 20 LTS
 - A Telegram Bot Token (get one from [@BotFather](https://t.me/BotFather))
 
 ### Setup
@@ -40,6 +40,9 @@ A Telegram bot that simulates Dollar Cost Averaging (DCA) investment strategies 
 # Clone the repository
 git clone https://github.com/WalterMustang/dca-shock-bot.git
 cd dca-shock-bot
+
+# Check your Node.js version
+node --version
 
 # Install dependencies
 npm install
@@ -204,10 +207,10 @@ dca-shock-bot/
 
 ## Tech Stack
 
-- **Runtime**: Node.js 18+
+- **Runtime**: Node.js 20 LTS
 - **Framework**: [Telegraf](https://telegraf.js.org/) v4.16
 - **Charts**: [QuickChart.io](https://quickchart.io)
-- **Deployment**: Docker / Railway / Any Node.js host
+- **Deployment**: Docker / Railway / Any Node.js 20 host
 
 ## Railway → Render Migration (Step-by-Step)
 
