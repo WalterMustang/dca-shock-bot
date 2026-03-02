@@ -127,6 +127,30 @@ pm2 save
 pm2 startup
 ```
 
+Then open Telegram and send:
+- `/start`
+- `/help`
+
+**Checkpoint:** You should now see the welcome/help responses from your bot.
+
+### 5) Troubleshooting
+
+- **“401 Unauthorized”**
+  - Your `BOT_TOKEN` is invalid or incomplete.
+  - Re-copy the token from BotFather and set it again.
+  - **You should now see** the bot start successfully after restarting with `npm start`.
+
+- **Bot not responding**
+  - The bot process may not be running.
+  - Confirm `npm start` is still active and there are no runtime errors in the terminal.
+  - **You should now see** replies after sending `/start` again.
+
+- **Privacy mode / permissions**
+  - In groups, Telegram bots with privacy mode enabled only receive certain messages.
+  - Use commands like `/help@YourBotUsername` in groups, or disable privacy mode via BotFather if appropriate.
+  - Ensure the bot has permission to read/send messages in the chat.
+  - **You should now see** command responses once privacy mode and permissions are configured correctly.
+
 ## Usage
 
 ### Commands
