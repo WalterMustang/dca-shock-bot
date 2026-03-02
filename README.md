@@ -1,6 +1,7 @@
 # DCA Shock Bot
 
-A Telegram bot that simulates Dollar Cost Averaging (DCA) investment strategies with market shock modeling. Visualize how your weekly investments could grow over time, and see the impact of market crashes on your portfolio.
+A Telegram bot that simulates Dollar Cost Averaging (DCA) investment strategies with market shock modeling.
+It is designed to be easy to self-host, easy to learn from, and easy to showcase as a practical Node.js project.
 
 ## Why I Built This
 
@@ -34,14 +35,33 @@ Use this quick flow to evaluate the project in under a minute:
 ![License](https://img.shields.io/badge/License-MIT-blue)
 ![Telegram Bot](https://img.shields.io/badge/Telegram-Bot-blue)
 
+## Why This Project Is Worth Showcasing
+
+This project demonstrates how to build a useful Telegram bot end-to-end:
+- Parsing user commands and validating input safely
+- Running financial simulations with weekly compounding
+- Handling market shock and recovery logic
+- Rendering charts users can understand quickly
+- Creating a clean interactive UX with Telegram inline buttons
+
+If someone wants to learn by building and running a real bot on their own machine (without paying for a platform), this repo is a strong starting point.
+
+## What You’ll Learn
+
+- How a Telegram bot works with long polling
+- How to structure a Node.js bot project
+- How to model DCA growth, fees, drawdowns, and recovery periods
+- How to compare multiple investment scenarios
+- How to run a bot locally, in Docker, or on a small VPS
+
 ## Features
 
 ### Core Simulation
 - **Weekly DCA contributions** with compound interest
 - **Customizable annual returns** (-100% to +200%)
 - **Optional management fees** (0-5% annually)
-- **Market shock simulation** - model crashes at specific years
-- **Recovery tracking** - see how long it takes to recover from crashes
+- **Market shock simulation** at specific years
+- **Recovery tracking** after shock events
 
 ### Output Metrics
 - Total contributed amount
@@ -56,38 +76,108 @@ Use this quick flow to evaluate the project in under a minute:
 - Preset scenarios (Base, Bull, Pain)
 - Share functionality to export commands
 
-## Installation
+## Quickstart (10 Minutes)
 
 ### Prerequisites
-- Node.js 18 or higher
+- Node.js 20 LTS
 - A Telegram Bot Token (get one from [@BotFather](https://t.me/BotFather))
 
-### Setup
+Check your Node version:
 
 ```bash
-# Clone the repository
-git clone https://github.com/WalterMustang/dca-shock-bot.git
+node -v
+```
+
+### 2) Create your bot token
+In Telegram:
+1. Open [@BotFather](https://t.me/BotFather)
+2. Run `/newbot`
+3. Follow prompts and copy your token
+
+### 3) Clone and install
+
+```bash
+git clone <your-fork-or-this-repo-url>
 cd dca-shock-bot
-
-# Install dependencies
 npm install
+```
 
-# Set your bot token
+### 4) Set environment variable
+
+Linux/macOS:
+```bash
 export BOT_TOKEN="your-telegram-bot-token"
+```
 
-# Start the bot
+Windows (PowerShell):
+```powershell
+$env:BOT_TOKEN="your-telegram-bot-token"
+```
+
+### 5) Start the bot
+
+```bash
 npm start
 ```
 
-### Docker
+### 6) Verify it works
+Open your bot in Telegram and send:
+- `/start`
+- `/help`
+- `/dca 100 10 8 shock -30 at 3`
+
+You should now receive a response with metrics and a chart.
+
+## Self-Hosting (No Paid Platform Required)
+
+This bot uses **Telegram long polling**, so you can run it without setting up a webhook, public domain, or paid platform.
+
+### Option A: Run on your own machine
+Use the Quickstart above and keep the process running.
+
+### Option B: Run with Docker
 
 ```bash
-# Build the image
+# Build
 docker build -t dca-shock-bot .
 
-# Run the container
-docker run -e BOT_TOKEN="your-token" dca-shock-bot
+# Run
+docker run -e BOT_TOKEN="your-token" --name dca-shock-bot dca-shock-bot
 ```
+
+### Option C: Run 24/7 on a VPS
+Use a small VPS and a process manager (example with PM2):
+
+```bash
+npm install -g pm2
+pm2 start index.js --name dca-shock-bot
+pm2 save
+pm2 startup
+```
+
+Then open Telegram and send:
+- `/start`
+- `/help`
+
+**Checkpoint:** You should now see the welcome/help responses from your bot.
+
+### 5) Troubleshooting
+
+- **“401 Unauthorized”**
+  - Your `BOT_TOKEN` is invalid or incomplete.
+  - Re-copy the token from BotFather and set it again.
+  - **You should now see** the bot start successfully after restarting with `npm start`.
+
+- **Bot not responding**
+  - The bot process may not be running.
+  - Confirm `npm start` is still active and there are no runtime errors in the terminal.
+  - **You should now see** replies after sending `/start` again.
+
+- **Privacy mode / permissions**
+  - In groups, Telegram bots with privacy mode enabled only receive certain messages.
+  - Use commands like `/help@YourBotUsername` in groups, or disable privacy mode via BotFather if appropriate.
+  - Ensure the bot has permission to read/send messages in the chat.
+  - **You should now see** command responses once privacy mode and permissions are configured correctly.
 
 ## Usage
 
@@ -108,8 +198,6 @@ docker run -e BOT_TOKEN="your-token" dca-shock-bot
 
 ### ETF Presets
 
-Quick commands to simulate popular ETFs with their historical average returns:
-
 | Command | ETF | Avg Return | Fee | Typical Crash |
 |---------|-----|------------|-----|---------------|
 | `/voo` | S&P 500 (VOO) | 10.5% | 0.03% | -35% |
@@ -119,11 +207,11 @@ Quick commands to simulate popular ETFs with their historical average returns:
 | `/bnd` | US Bonds | 4% | 0.03% | -10% |
 | `/btc` | Bitcoin | 50% | 0% | -70% |
 
-*Returns based on long-term historical averages. Past performance does not guarantee future results.*
+*Returns are based on long-term historical averages. Past performance does not guarantee future results.*
 
 ### Command Syntax
 
-```
+```text
 /dca <weekly_amount> <years> <annual_return> [fee <fee_pct>] [shock <shock_pct> at <year>]
 ```
 
@@ -147,21 +235,13 @@ Quick commands to simulate popular ETFs with their historical average returns:
 
 # Compare two custom scenarios
 /compare 100 10 8 vs 100 10 12
-
 ```
 
-### Interactive Buttons
+## Troubleshooting
 
-| Button | Action |
-|--------|--------|
-| `$-50/wk` / `$+50/wk` | Adjust weekly contribution |
-| `Yrs -1` / `Yrs +1` | Adjust investment duration |
-| `-2%` / `+2%` | Adjust expected annual return |
-| `Shock %` | Toggle shock on/off (shows current %) |
-| `Worse` | Increase shock severity by 10% |
-| `VOO` / `QQQ` / `VTI` / `BTC` | Load ETF preset with historical returns |
-| `Base` / `Bull` / `Pain` | Load preset scenarios |
-| `Share` | Export full results with command |
+- **401 Unauthorized**: Your `BOT_TOKEN` is invalid or has extra spaces/quotes.
+- **Bot does not reply**: Check the process is still running and no startup errors were logged.
+- **No response in group chats**: Review BotFather privacy mode and bot permissions.
 
 ## Configuration
 
@@ -184,126 +264,39 @@ Quick commands to simulate popular ETFs with their historical average returns:
 
 ## How It Works
 
-### DCA Simulation Algorithm
-
-1. **Weekly compounding**: Converts annual return to weekly rate using `(1 + annual)^(1/52) - 1`
-2. **For each week**:
+1. Convert annual return to weekly rate: `(1 + annual)^(1/52) - 1`
+2. For each week:
    - Add weekly contribution
-   - Apply weekly return (compound growth)
-   - Deduct weekly fee equivalent
-   - If shock week: apply shock percentage
-   - Track peak value and drawdown
-3. **Calculate metrics**: ROI, max drawdown, recovery time
-
-### Chart Generation
-
-Uses [QuickChart.io](https://quickchart.io) to generate clean, Apple-style line charts with:
-- Blue line (#007AFF) with gradient fill
-- Minimal axes for clean appearance
-- Automatic downsampling for large datasets
+   - Apply weekly return
+   - Deduct weekly fee
+   - Apply shock at configured week (if any)
+   - Track peak, drawdown, and recovery
+3. Return final metrics and render chart URL via QuickChart
 
 ## Development
 
-### Running Tests
+### Run tests
 
 ```bash
 npm test
 ```
 
-The test suite includes 31 unit tests covering:
-- Utility functions (escaping, number conversion, clamping)
-- Financial calculations (weekly rate/fee conversion)
-- Parameter validation
-- DCA simulation engine
-- Command parsing
-
 ### Project Structure
 
-```
+```text
 dca-shock-bot/
-├── index.js          # Main bot logic (~750 lines)
-├── index.test.js     # Unit tests (31 tests)
+├── index.js          # Main bot logic
+├── index.test.js     # Unit tests
 ├── package.json      # Dependencies and scripts
 ├── package-lock.json # Lock file
 ├── Dockerfile        # Container configuration
-├── .nvmrc            # Node version (20)
-└── README.md         # This file
+├── .nvmrc            # Node version
+└── README.md         # Documentation
 ```
 
 ## Tech Stack
 
-- **Runtime**: Node.js 18+
+- **Runtime**: Node.js 20 LTS
 - **Framework**: [Telegraf](https://telegraf.js.org/) v4.16
 - **Charts**: [QuickChart.io](https://quickchart.io)
-- **Deployment**: Docker / Railway / Any Node.js host
-
-## Railway → Render Migration (Step-by-Step)
-
-This bot currently runs with **long polling** (not Telegram webhook mode), so the easiest Render setup is a **Background Worker**.
-
-### 1) Prepare your repo
-
-1. Push your latest code to GitHub.
-2. Confirm your `Dockerfile` is present (it is in this project).
-3. Make sure you have your Telegram `BOT_TOKEN` from [@BotFather](https://t.me/BotFather).
-
-### 2) Create a Render Background Worker
-
-1. Log in to Render.
-2. Click **New +** → **Background Worker**.
-3. Connect your GitHub repository.
-4. Select the branch you want to deploy.
-
-### 3) Configure build/start
-
-If using Docker (recommended for this repo):
-
-- **Environment**: `Docker`
-- **Dockerfile Path**: `./Dockerfile`
-- **Start Command**: leave empty (Docker `CMD ["npm", "start"]` is already defined)
-
-If using Native Node instead of Docker:
-
-- **Build Command**: `npm install --omit=dev`
-- **Start Command**: `npm start`
-
-### 4) Add environment variables
-
-In Render service settings, add:
-
-- `BOT_TOKEN` = your real Telegram bot token (required)
-- `NODE_ENV` = `production` (optional but recommended)
-
-### 5) Deploy
-
-1. Click **Create Background Worker** / **Deploy**.
-2. Open Render logs and verify you see a successful start (for example: bot launch message).
-3. In Telegram, send `/start` to your bot and confirm it replies.
-
-### 6) Disable Railway service
-
-After Render is confirmed working:
-
-1. Stop/suspend your Railway deployment.
-2. Keep only one active deployment to avoid confusion and duplicate maintenance.
-
-### Notes / Troubleshooting
-
-- Long polling bots should run as **Background Worker**, not **Web Service**.
-- If your Render free tier sleeps or does not support always-on worker behavior, bot responses can be delayed while waking up.
-- If you decide to use Render Web Service later, you must refactor the bot to Telegram webhook mode (HTTP server + webhook route).
-
-## License
-
-MIT License - feel free to use, modify, and distribute.
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Run tests: `npm test`
-4. Submit a pull request
-
-## Disclaimer
-
-This bot is for **educational and entertainment purposes only**. It does not constitute financial advice. Past performance does not guarantee future results. Always consult a qualified financial advisor before making investment decisions.
+- **Deployment**: Local machine / Docker / VPS
