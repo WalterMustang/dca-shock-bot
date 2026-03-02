@@ -28,38 +28,73 @@ A Telegram bot that simulates Dollar Cost Averaging (DCA) investment strategies 
 - Preset scenarios (Base, Bull, Pain)
 - Share functionality to export commands
 
-## Installation
+## Quickstart (10 minutes)
 
-### Prerequisites
-- Node.js 18 or higher
-- A Telegram Bot Token (get one from [@BotFather](https://t.me/BotFather))
+### 1) Create your Telegram bot in @BotFather
 
-### Setup
+1. Open [@BotFather](https://t.me/BotFather) in Telegram.
+2. Send `/newbot` and follow the prompts to set a bot name and username.
+3. Copy the bot token BotFather returns.
+
+**Checkpoint:** You should now see a bot token that looks like `123456789:AA...`.
+
+### 2) Clone this repository and install dependencies
 
 ```bash
-# Clone the repository
 git clone https://github.com/WalterMustang/dca-shock-bot.git
 cd dca-shock-bot
-
-# Install dependencies
 npm install
+```
 
-# Set your bot token
+**Checkpoint:** You should now see `npm install` complete without errors.
+
+### 3) Set `BOT_TOKEN`
+
+Use the token from BotFather.
+
+**Linux/macOS (bash/zsh):**
+
+```bash
 export BOT_TOKEN="your-telegram-bot-token"
+```
 
-# Start the bot
+**Windows (PowerShell):**
+
+```powershell
+$env:BOT_TOKEN="your-telegram-bot-token"
+```
+
+**Checkpoint:** You should now have `BOT_TOKEN` available in your current terminal session.
+
+### 4) Start the bot and verify commands
+
+```bash
 npm start
 ```
 
-### Docker
+Then open Telegram and send:
+- `/start`
+- `/help`
 
-```bash
-# Build the image
-docker build -t dca-shock-bot .
+**Checkpoint:** You should now see the welcome/help responses from your bot.
 
-# Run the container
-docker run -e BOT_TOKEN="your-token" dca-shock-bot
-```
+### 5) Troubleshooting
+
+- **“401 Unauthorized”**
+  - Your `BOT_TOKEN` is invalid or incomplete.
+  - Re-copy the token from BotFather and set it again.
+  - **You should now see** the bot start successfully after restarting with `npm start`.
+
+- **Bot not responding**
+  - The bot process may not be running.
+  - Confirm `npm start` is still active and there are no runtime errors in the terminal.
+  - **You should now see** replies after sending `/start` again.
+
+- **Privacy mode / permissions**
+  - In groups, Telegram bots with privacy mode enabled only receive certain messages.
+  - Use commands like `/help@YourBotUsername` in groups, or disable privacy mode via BotFather if appropriate.
+  - Ensure the bot has permission to read/send messages in the chat.
+  - **You should now see** command responses once privacy mode and permissions are configured correctly.
 
 ## Usage
 
