@@ -50,9 +50,9 @@ If someone wants to learn by building and running a real bot on their own machin
 
 ## Quickstart (10 Minutes)
 
-### 1) Prerequisites
-- Node.js **20 LTS** (recommended)
-- A Telegram Bot Token from [@BotFather](https://t.me/BotFather)
+### Prerequisites
+- Node.js 20 LTS
+- A Telegram Bot Token (get one from [@BotFather](https://t.me/BotFather))
 
 Check your Node version:
 
