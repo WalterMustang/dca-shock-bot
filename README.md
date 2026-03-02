@@ -3,7 +3,35 @@
 A Telegram bot that simulates Dollar Cost Averaging (DCA) investment strategies with market shock modeling.
 It is designed to be easy to self-host, easy to learn from, and easy to showcase as a practical Node.js project.
 
-![Node.js](https://img.shields.io/badge/Node.js-20_LTS-green)
+## Why I Built This
+
+I built DCA Shock Bot as a practical way to combine financial modeling with a Telegram-first user experience. I wanted a tool that makes it easy to explore long-term DCA behavior, then stress-test it with realistic crash and recovery scenarios instead of relying on smooth, idealized growth curves.
+
+## What You’ll Learn
+
+- How to build a Node.js Telegram bot with command-driven workflows and clean chat UX patterns.
+- How a DCA simulation engine can model weekly contributions, compounding, market shocks, and time-to-recovery.
+- How to turn simulation output into readable visual charts and interactive inline controls for fast scenario iteration.
+- How to package and deploy a bot with production-friendly basics (environment variables, Docker image flow, and runtime health checks).
+
+## Engineering Highlights
+
+- Flexible command parsing for both preset and custom simulation flows.
+- A deterministic simulation core that tracks contributions, growth, drawdown, and post-crash recovery.
+- Chart generation via QuickChart for immediate visual feedback inside Telegram.
+- Inline keyboard controls for scenario toggles, parameter tweaks, and easy sharing.
+
+## Demo Flow
+
+Use this quick flow to evaluate the project in under a minute:
+
+```text
+/start
+/dca 100 10 8 shock -30 at 3
+/compare voo qqq
+```
+
+![Node.js](https://img.shields.io/badge/Node.js-18%2B-green)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 ![Telegram Bot](https://img.shields.io/badge/Telegram-Bot-blue)
 
