@@ -14,6 +14,7 @@ const {
   simulateDCA,
   parseDcaCommand,
   parseCompareCommand,
+  parseMixShortAllocations,
   formatMoney
 } = require("./index.js");
 
@@ -382,6 +383,28 @@ test("parseCompareCommand parses scenario compare", () => {
 test("parseCompareCommand rejects invalid syntax", () => {
   const result = parseCompareCommand("/compare 100 10 vs");
   assert.strictEqual(result.kind, "invalid");
+});
+
+
+test("parseMixShortAllocations parses valid ETF mix and preserves names for rendering", () => {
+  const allocations = parseMixShortAllocations("60voo-40bnd");
+  assert.strictEqual(allocations.length, 2);
+  assert.strictEqual(allocations[0].pct, 60);
+  assert.strictEqual(allocations[0].name, "voo");
+  assert.strictEqual(allocations[0].etf.name, "VOO");
+  assert.strictEqual(allocations[1].pct, 40);
+  assert.strictEqual(allocations[1].name, "bnd");
+  assert.strictEqual(allocations[1].etf.name, "BND");
+
+  const mixName = allocations.map(a => `${a.pct}% ${a.etf.name}`).join(" + ");
+  assert.strictEqual(mixName, "60% VOO + 40% BND");
+});
+
+test("parseMixShortAllocations filters invalid entries", () => {
+  const allocations = parseMixShortAllocations("60voo-bad-40zzz-20bnd");
+  assert.strictEqual(allocations.length, 2);
+  assert.strictEqual(allocations[0].name, "voo");
+  assert.strictEqual(allocations[1].name, "bnd");
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
