@@ -490,6 +490,29 @@ function parseCompareCommand(text) {
   return { kind: "scenario", left, right };
 }
 
+
+/**
+ * Parse compact mix string (e.g., "60voo-40bnd") into validated allocations.
+ * @param {string} mixShort - Compact mix format
+ * @returns {{pct:number, etf:object, name:string}[]} Parsed allocations with ETF data
+ */
+function parseMixShortAllocations(mixShort) {
+  const parts = String(mixShort || "").split("-");
+  const allocations = [];
+
+  for (const part of parts) {
+    const match = part.match(/^(\d+)(\w+)$/);
+    if (!match) continue;
+
+    const etf = ETF_PRESETS[match[2]];
+    if (!etf) continue;
+
+    allocations.push({ pct: Number(match[1]), etf, name: match[2] });
+  }
+
+  return allocations;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Chart Generation
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1834,15 +1857,7 @@ bot.action(/^mix:amt:([+-]\d+):(.+)$/, async (ctx) => {
 
   // Re-trigger the mix preset to refresh display
   // Parse mixShort back to allocations (e.g., "60voo-40bnd")
-  const parts = mixShort.split("-");
-  const allocationsAmt = [];
-  for (const part of parts) {
-    const match = part.match(/^(\d+)(\w+)$/);
-    if (match) {
-      const etf = ETF_PRESETS[match[2]];
-      if (etf) allocationsAmt.push({ pct: Number(match[1]), etf, name: match[2] });
-    }
-  }
+  const allocationsAmt = parseMixShortAllocations(mixShort);
 
   if (allocationsAmt.length === 0) return;
 
@@ -1858,7 +1873,7 @@ bot.action(/^mix:amt:([+-]\d+):(.+)$/, async (ctx) => {
   blendedFee = Math.round(blendedFee * 100) / 100;
   blendedShock = Math.round(blendedShock);
 
-  const mixName = allocations.map(a => `${a.pct}% ${a.etf.name}`).join(" + ");
+  const mixName = allocationsAmt.map(a => `${a.pct}% ${a.etf.name}`).join(" + ");
   const updatedCur = userState.get(userId);
   const curr = updatedCur.currency || "usd";
 
@@ -2088,5 +2103,6 @@ module.exports = {
   // Parsing
   parseDcaCommand,
   parseCompareCommand,
+  parseMixShortAllocations,
   formatMoney
 };
