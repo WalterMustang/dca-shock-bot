@@ -1,5 +1,7 @@
 # Implementation Plan
 
+_Last verified against code on 2026-03-27._
+
 ## Completed Features ✓
 
 ### Phase 1: Core Bot (Done)
@@ -18,17 +20,19 @@
 
 ### Phase 3: Advanced Features (Done)
 - [x] Goal Calculator (/goal)
-- [x] Compare ETFs (/compare)
+- [x] Compare ETFs and custom scenarios (/compare)
 - [x] Portfolio Mix (/mix)
 - [x] Twitter Share
 - [x] Milestones in results
 - [x] Inflation-adjusted returns
+- [x] Session-only save + run saved scenario buttons
 
 ### Phase 4: UX Polish (Done)
 - [x] Improved /start onboarding
 - [x] Close button → Home menu
 - [x] Adjustment buttons in mix view
 - [x] Currency support (USD, EUR, CHF)
+- [x] Weekly ↔ Monthly contribution mode toggle (/monthly)
 
 ### Phase 5: Documentation (Done)
 - [x] README.md
@@ -74,9 +78,9 @@
 ## Technical Debt
 
 ### Known Issues
-1. mix:amt handler uses wrong variable name (allocations vs allocationsAmt)
-2. Duplicate code in mix adjustment handlers
-3. No input sanitization for extreme values
+1. In-app help text still references BTC at 50% in some messages, while `ETF_PRESETS.btc` is 20%.
+2. Mix amount/years handlers have duplicated blending/render logic and should be consolidated.
+3. Mix callback payload parser only supports integer percentages in compact strings (e.g., `60voo-40bnd`), so fractional weights are not supported in button flows.
 
 ### Refactoring Opportunities
 1. Extract mix calculation logic into shared function

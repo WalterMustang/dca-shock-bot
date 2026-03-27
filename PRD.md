@@ -2,6 +2,8 @@
 
 ## DCA Shock Bot
 
+_Last verified against code on 2026-03-27._
+
 ### Overview
 A Telegram bot that helps users visualize Dollar Cost Averaging (DCA) investment strategies, including market crash scenarios, ETF comparisons, and portfolio mixing.
 
@@ -10,7 +12,7 @@ A Telegram bot that helps users visualize Dollar Cost Averaging (DCA) investment
 - People planning long-term investment strategies
 - Users wanting to understand market crash impact on portfolios
 
-### Core Features
+### Current Shipped Behavior
 
 #### 1. DCA Simulation
 - **Command**: `/dca <weekly_amount> <years> <return%> [shock <pct> at <year>]`
@@ -18,6 +20,7 @@ A Telegram bot that helps users visualize Dollar Cost Averaging (DCA) investment
 - Shows final portfolio value, gains, ROI
 - Visualizes growth with chart
 - Supports market crash ("shock") scenarios
+- Supports optional fee parsing (`fee <pct>`) and tracks inflation-adjusted final value
 
 #### 2. ETF Presets
 - **VOO**: S&P 500 (10.5% avg return)
@@ -39,8 +42,10 @@ A Telegram bot that helps users visualize Dollar Cost Averaging (DCA) investment
 - Presets for $500k and $1M goals
 
 #### 5. Compare
-- **Command**: `/compare <etf1> <etf2>`
-- Side-by-side ETF comparison
+- **Commands**:
+  - `/compare <etf1> <etf2>`
+  - `/compare <w1> <y1> <r1> vs <w2> <y2> <r2>`
+- Side-by-side ETF and custom scenario comparison
 - Shows final value, ROI, drawdown for each
 
 #### 6. Currency Support
@@ -51,6 +56,15 @@ A Telegram bot that helps users visualize Dollar Cost Averaging (DCA) investment
 #### 7. Share
 - Twitter share with auto-generated tweet
 - Includes simulation results and bot link
+
+#### 8. Frequency Mode
+- **Command**: `/monthly`
+- Toggles contribution mode between weekly and monthly
+- Reuses current scenario state
+
+#### 9. Session Save/Replay
+- **Inline Actions**: Save scenario + run saved scenario
+- Scope is in-memory session only (no persistence across restarts)
 
 ### UI/UX Requirements
 - Inline keyboard buttons for all interactions
@@ -70,7 +84,7 @@ A Telegram bot that helps users visualize Dollar Cost Averaging (DCA) investment
 - Share rate (Twitter shares)
 - Return rate (users coming back)
 
-### Future Considerations
+### Roadmap (Not Shipped Yet)
 - Database for user persistence
 - More ETFs (ARKK, VGT, SPY)
 - Referral tracking
