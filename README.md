@@ -3,6 +3,8 @@
 A Telegram bot that simulates Dollar Cost Averaging (DCA) investment strategies with market shock modeling.
 It is designed to be easy to self-host, easy to learn from, and easy to showcase as a practical Node.js project.
 
+_Last verified against code on 2026-03-27._
+
 ## Why I Built This
 
 I built DCA Shock Bot as a practical way to combine financial modeling with a Telegram-first user experience. I wanted a tool that makes it easy to explore long-term DCA behavior, then stress-test it with realistic crash and recovery scenarios instead of relying on smooth, idealized growth curves.
@@ -188,6 +190,10 @@ Then open Telegram and send:
 | `/start` | Welcome message |
 | `/help` | Show usage examples and preset buttons |
 | `/dca <weekly> <years> <return> [options]` | Run custom simulation |
+| `/monthly` | Toggle weekly/monthly contribution mode |
+| `/goal <target> <years> <return>` | Reverse-calc required weekly/monthly contribution |
+| `/mix <pct> <etf> <pct> <etf> ...` | Simulate blended ETF allocation |
+| `/currency` | Choose display currency (USD, EUR, CHF) |
 | `/etf` | Show all ETF presets with historical returns |
 | `/base` | Preset: $100/wk, 10yr, 7%, -30% shock at year 3 |
 | `/bull` | Preset: $100/wk, 10yr, 12%, no shock |
@@ -205,7 +211,7 @@ Then open Telegram and send:
 | `/vti` | Total US Market | 10% | 0.03% | -35% |
 | `/vxus` | International | 5% | 0.08% | -40% |
 | `/bnd` | US Bonds | 4% | 0.03% | -10% |
-| `/btc` | Bitcoin | 50% | 0% | -70% |
+| `/btc` | Bitcoin | 20% | 0% | -50% |
 
 *Returns are based on long-term historical averages. Past performance does not guarantee future results.*
 
@@ -300,3 +306,15 @@ dca-shock-bot/
 - **Framework**: [Telegraf](https://telegraf.js.org/) v4.16
 - **Charts**: [QuickChart.io](https://quickchart.io)
 - **Deployment**: Local machine / Docker / VPS
+
+## Known Limitations (Current)
+
+- Some in-bot help text still mentions BTC as 50% average return; code presets use 20%.
+- Mix adjustment button handlers currently duplicate blending/render logic and should be refactored.
+
+## Roadmap (Forward-Looking)
+
+- Database-backed persistence for user preferences/history
+- Additional ETF presets and non-BTC crypto assets
+- Multi-language support
+- Premium/reporting and engagement features
