@@ -76,6 +76,14 @@ const ETF_PRESETS = {
   }
 };
 
+const HELP_QUICK_ETF_TEXT =
+  `/voo - S&P 500 (10.5% avg)\n` +
+  `/qqq - Nasdaq Tech (14% avg)\n` +
+  `/btc - Bitcoin (${ETF_PRESETS.btc.annualReturnPct}% avg, high volatility)\n\n`;
+
+const HELP_ETF_RETURNS_TEXT =
+  `VOO 10.5% | QQQ 14% | VTI 10% | BTC ${ETF_PRESETS.btc.annualReturnPct}%`;
+
 const DEFAULTS = {
   weeklyAmount: 100,
   years: 10,
@@ -630,9 +638,7 @@ bot.action("showhelp", async (ctx) => {
     "<b>With market crash:</b>\n" +
     "<code>/dca 100 10 8 shock -30 at 3</code>\n= Same, but -30% crash at year 3\n\n" +
     "<b>Quick ETF simulations:</b>\n" +
-    "/voo - S&P 500 (10.5% avg)\n" +
-    "/qqq - Nasdaq Tech (14% avg)\n" +
-    "/btc - Bitcoin (50% avg, very risky)\n\n" +
+    HELP_QUICK_ETF_TEXT +
     "<b>Buttons:</b> Adjust values without retyping\n" +
     "<b>Share:</b> Export your results";
 
@@ -661,7 +667,7 @@ bot.command("help", async (ctx) => {
     "/compare voo qqq - Compare two ETFs\n" +
     "/compare 100 10 8 vs 100 10 12 - Compare 2 custom scenarios\n\n" +
     "<b>ETF Returns:</b>\n" +
-    "VOO 10.5% | QQQ 14% | VTI 10% | BTC 50%";
+    HELP_ETF_RETURNS_TEXT;
   const kb = Markup.inlineKeyboard([
     [Markup.button.callback("🎯 Goal $1M", "goal:1000000"), Markup.button.callback("⚖️ VOO vs QQQ", "cmp:voo:qqq")],
     [Markup.button.callback("VOO", "etf:voo"), Markup.button.callback("QQQ", "etf:qqq"), Markup.button.callback("BTC", "etf:btc")],
@@ -1600,5 +1606,7 @@ module.exports = {
   parseCompareCommand,
   parseMixShortAllocations,
   buildMixSimulationState,
-  formatMoney
+  formatMoney,
+  HELP_QUICK_ETF_TEXT,
+  HELP_ETF_RETURNS_TEXT
 };
