@@ -513,6 +513,98 @@ function parseMixShortAllocations(mixShort) {
   return allocations;
 }
 
+/**
+ * Build mix simulation state from ETF allocations and base user state.
+ * @param {{pct:number, etf:object, name:string}[]} allocations
+ * @param {object} baseState
+ * @returns {object|null}
+ */
+function buildMixSimulationState(allocations, baseState = {}) {
+  if (!Array.isArray(allocations) || allocations.length === 0) return null;
+
+  let blendedReturn = 0;
+  let blendedFee = 0;
+  let blendedShock = 0;
+
+  allocations.forEach((a) => {
+    const weight = a.pct / 100;
+    blendedReturn += a.etf.annualReturnPct * weight;
+    blendedFee += a.etf.annualFeePct * weight;
+    blendedShock += a.etf.typicalShock * weight;
+  });
+
+  blendedReturn = Math.round(blendedReturn * 10) / 10;
+  blendedFee = Math.round(blendedFee * 100) / 100;
+  blendedShock = Math.round(blendedShock);
+
+  const mixName = allocations.map((a) => `${a.pct}% ${a.etf.name}`).join(" + ");
+  const mixShort = allocations.map((a) => `${a.pct}${a.name}`).join("-");
+
+  const sim = simulateDCA({
+    ...baseState,
+    annualReturnPct: blendedReturn,
+    annualFeePct: blendedFee,
+    shockPct: blendedShock,
+    shockYear: Math.min(baseState.years || 10, 3)
+  });
+
+  const roi = sim.contributed > 0 ? ((sim.gains / sim.contributed) * 100).toFixed(1) : "0";
+
+  return {
+    blendedReturn,
+    blendedFee,
+    blendedShock,
+    mixName,
+    mixShort,
+    sim,
+    roi
+  };
+}
+
+function formatMixMessage(mixState, displayState = {}) {
+  const curr = displayState.currency || "usd";
+  const years = displayState.years || 10;
+  const weeklyAmount = displayState.weeklyAmount || 100;
+
+  return (
+    `🎨 <b>Portfolio Mix</b>\n\n` +
+    `<b>${mixState.mixName}</b>\n\n` +
+    `📊 Blended return: ${mixState.blendedReturn}%\n` +
+    `💰 Blended fee: ${mixState.blendedFee}%\n` +
+    `📉 Blended crash: ${mixState.blendedShock}%\n\n` +
+    `<b>Simulation (${years} years, ${formatMoney(weeklyAmount, curr)}/wk):</b>\n` +
+    `💵 Contributed: ${formatMoney(mixState.sim.contributed, curr)}\n` +
+    `📈 Final: ${formatMoney(mixState.sim.finalValue, curr)}\n` +
+    `✅ Gains: ${formatMoney(mixState.sim.gains, curr)} (${mixState.roi}% ROI)\n` +
+    `📉 Max drawdown: ${mixState.sim.maxDrawdownPct.toFixed(1)}%`
+  );
+}
+
+function buildMixControlsKeyboard(mixShort, options = {}) {
+  const amountButtonsWithDollar = options.amountButtonsWithDollar !== false;
+  const minusLabel = amountButtonsWithDollar ? "$-50/wk" : "-50/wk";
+  const plusLabel = amountButtonsWithDollar ? "$+50/wk" : "+50/wk";
+
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback(minusLabel, `mix:amt:-50:${mixShort}`),
+      Markup.button.callback(plusLabel, `mix:amt:+50:${mixShort}`),
+      Markup.button.callback("Yrs -1", `mix:yrs:-1:${mixShort}`),
+      Markup.button.callback("Yrs +1", `mix:yrs:+1:${mixShort}`)
+    ],
+    [Markup.button.callback("▶️ Full simulation", `mix:run:${mixShort}`)],
+    [
+      Markup.button.callback("60/40 VOO/BND", "mix:60voo-40bnd"),
+      Markup.button.callback("80/20 VOO/BND", "mix:80voo-20bnd")
+    ],
+    [
+      Markup.button.callback("70/30 VTI/VXUS", "mix:70vti-30vxus"),
+      Markup.button.callback("50/50 VOO/QQQ", "mix:50voo-50qqq")
+    ],
+    [Markup.button.callback("🏠 Menu", "home")]
+  ]);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Chart Generation
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1207,79 +1299,22 @@ bot.command("mix", async (ctx) => {
     allocations.forEach(a => a.pct = Math.round(a.pct * factor));
   }
 
-  // Calculate blended return, fee, and shock
-  let blendedReturn = 0;
-  let blendedFee = 0;
-  let blendedShock = 0;
-
-  allocations.forEach(a => {
-    const weight = a.pct / 100;
-    blendedReturn += a.etf.annualReturnPct * weight;
-    blendedFee += a.etf.annualFeePct * weight;
-    blendedShock += a.etf.typicalShock * weight;
-  });
-
-  blendedReturn = Math.round(blendedReturn * 10) / 10;
-  blendedFee = Math.round(blendedFee * 100) / 100;
-  blendedShock = Math.round(blendedShock);
-
-  // Build allocation display
-  const mixName = allocations.map(a => `${a.pct}% ${a.etf.name}`).join(" + ");
-  const mixShort = allocations.map(a => `${a.pct}${a.name}`).join("-");
-
-  // Run simulation
   const cur = userState.get(userId) || clampParams({});
-  const sim = simulateDCA({
-    ...cur,
-    annualReturnPct: blendedReturn,
-    annualFeePct: blendedFee,
-    shockPct: blendedShock,
-    shockYear: Math.min(cur.years || 10, 3)
-  });
-
-  const roi = sim.contributed > 0 ? ((sim.gains / sim.contributed) * 100).toFixed(1) : "0";
-  const curr = cur.currency || "usd";
-
-  const msg =
-    `🎨 <b>Portfolio Mix</b>\n\n` +
-    `<b>${mixName}</b>\n\n` +
-    `📊 Blended return: ${blendedReturn}%\n` +
-    `💰 Blended fee: ${blendedFee}%\n` +
-    `📉 Blended crash: ${blendedShock}%\n\n` +
-    `<b>Simulation (${cur.years || 10} years, ${formatMoney(cur.weeklyAmount || 100, curr)}/wk):</b>\n` +
-    `💵 Contributed: ${formatMoney(sim.contributed, curr)}\n` +
-    `📈 Final: ${formatMoney(sim.finalValue, curr)}\n` +
-    `✅ Gains: ${formatMoney(sim.gains, curr)} (${roi}% ROI)\n` +
-    `📉 Max drawdown: ${sim.maxDrawdownPct.toFixed(1)}%`;
+  const mixState = buildMixSimulationState(allocations, cur);
+  if (!mixState) return;
+  const msg = formatMixMessage(mixState, cur);
 
   // Store the blended params for further adjustments
   userState.set(userId, {
     ...cur,
-    annualReturnPct: blendedReturn,
-    annualFeePct: blendedFee,
-    shockPct: blendedShock,
+    annualReturnPct: mixState.blendedReturn,
+    annualFeePct: mixState.blendedFee,
+    shockPct: mixState.blendedShock,
     shockYear: Math.min(cur.years || 10, 3),
-    _mixName: mixName
+    _mixName: mixState.mixName
   });
 
-  const kb = Markup.inlineKeyboard([
-    [
-      Markup.button.callback("$-50/wk", `mix:amt:-50:${mixShort}`),
-      Markup.button.callback("$+50/wk", `mix:amt:+50:${mixShort}`),
-      Markup.button.callback("Yrs -1", `mix:yrs:-1:${mixShort}`),
-      Markup.button.callback("Yrs +1", `mix:yrs:+1:${mixShort}`)
-    ],
-    [Markup.button.callback("▶️ Full simulation", `mix:run:${mixShort}`)],
-    [
-      Markup.button.callback("60/40 VOO/BND", "mix:60voo-40bnd"),
-      Markup.button.callback("80/20 VOO/BND", "mix:80voo-20bnd")
-    ],
-    [
-      Markup.button.callback("70/30 VTI/VXUS", "mix:70vti-30vxus"),
-      Markup.button.callback("50/50 VOO/QQQ", "mix:50voo-50qqq")
-    ],
-    [Markup.button.callback("🏠 Menu", "home")]
-  ]);
+  const kb = buildMixControlsKeyboard(mixState.mixShort);
 
   await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
   const curState = userState.get(userId) || clampParams({});
@@ -1759,85 +1794,25 @@ bot.action(/^mix:(\d+)(\w+)-(\d+)(\w+)(?:-(\d+)(\w+))?$/, async (ctx) => {
     allocations.push({ pct: Number(ctx.match[5]), name: ctx.match[6] });
   }
 
-  // Build mix command args and trigger /mix logic
-  const args = allocations.flatMap(a => [a.pct.toString(), a.name]);
-
-  // Calculate blended values
-  let blendedReturn = 0, blendedFee = 0, blendedShock = 0;
-  const validAllocs = [];
-
-  for (const a of allocations) {
-    const etf = ETF_PRESETS[a.name];
-    if (etf) {
-      validAllocs.push({ pct: a.pct, etf, name: a.name });
-      const weight = a.pct / 100;
-      blendedReturn += etf.annualReturnPct * weight;
-      blendedFee += etf.annualFeePct * weight;
-      blendedShock += etf.typicalShock * weight;
-    }
-  }
-
+  const validAllocs = allocations
+    .map((a) => ({ ...a, etf: ETF_PRESETS[a.name] }))
+    .filter((a) => Boolean(a.etf));
   if (validAllocs.length === 0) return;
-
-  blendedReturn = Math.round(blendedReturn * 10) / 10;
-  blendedFee = Math.round(blendedFee * 100) / 100;
-  blendedShock = Math.round(blendedShock);
-
-  const mixName = validAllocs.map(a => `${a.pct}% ${a.etf.name}`).join(" + ");
-
   const cur = userState.get(userId) || clampParams({});
-  const curr = cur.currency || "usd";
-  const sim = simulateDCA({
-    ...cur,
-    annualReturnPct: blendedReturn,
-    annualFeePct: blendedFee,
-    shockPct: blendedShock,
-    shockYear: Math.min(cur.years || 10, 3)
-  });
-
-  const roi = sim.contributed > 0 ? ((sim.gains / sim.contributed) * 100).toFixed(1) : "0";
-
-  const msg =
-    `🎨 <b>Portfolio Mix</b>\n\n` +
-    `<b>${mixName}</b>\n\n` +
-    `📊 Blended return: ${blendedReturn}%\n` +
-    `💰 Blended fee: ${blendedFee}%\n` +
-    `📉 Blended crash: ${blendedShock}%\n\n` +
-    `<b>Simulation (${cur.years || 10} years, ${formatMoney(cur.weeklyAmount || 100, curr)}/wk):</b>\n` +
-    `💵 Contributed: ${formatMoney(sim.contributed, curr)}\n` +
-    `📈 Final: ${formatMoney(sim.finalValue, curr)}\n` +
-    `✅ Gains: ${formatMoney(sim.gains, curr)} (${roi}% ROI)\n` +
-    `📉 Max drawdown: ${sim.maxDrawdownPct.toFixed(1)}%`;
+  const mixState = buildMixSimulationState(validAllocs, cur);
+  if (!mixState) return;
+  const msg = formatMixMessage(mixState, cur);
 
   userState.set(userId, {
     ...cur,
-    annualReturnPct: blendedReturn,
-    annualFeePct: blendedFee,
-    shockPct: blendedShock,
+    annualReturnPct: mixState.blendedReturn,
+    annualFeePct: mixState.blendedFee,
+    shockPct: mixState.blendedShock,
     shockYear: Math.min(cur.years || 10, 3),
-    _mixName: mixName
+    _mixName: mixState.mixName
   });
 
-  const mixShort = validAllocs.map(a => `${a.pct}${a.name}`).join("-");
-
-  const kb = Markup.inlineKeyboard([
-    [
-      Markup.button.callback("$-50/wk", `mix:amt:-50:${mixShort}`),
-      Markup.button.callback("$+50/wk", `mix:amt:+50:${mixShort}`),
-      Markup.button.callback("Yrs -1", `mix:yrs:-1:${mixShort}`),
-      Markup.button.callback("Yrs +1", `mix:yrs:+1:${mixShort}`)
-    ],
-    [Markup.button.callback("▶️ Full simulation", `mix:run:${mixShort}`)],
-    [
-      Markup.button.callback("60/40 VOO/BND", "mix:60voo-40bnd"),
-      Markup.button.callback("80/20 VOO/BND", "mix:80voo-20bnd")
-    ],
-    [
-      Markup.button.callback("70/30 VTI/VXUS", "mix:70vti-30vxus"),
-      Markup.button.callback("50/50 VOO/QQQ", "mix:50voo-50qqq")
-    ],
-    [Markup.button.callback("🏠 Menu", "home")]
-  ]);
+  const kb = buildMixControlsKeyboard(mixState.mixShort);
 
   await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
 });
@@ -1860,63 +1835,11 @@ bot.action(/^mix:amt:([+-]\d+):(.+)$/, async (ctx) => {
   const allocationsAmt = parseMixShortAllocations(mixShort);
 
   if (allocationsAmt.length === 0) return;
-
-  let blendedReturn = 0, blendedFee = 0, blendedShock = 0;
-  allocationsAmt.forEach(a => {
-    const weight = a.pct / 100;
-    blendedReturn += a.etf.annualReturnPct * weight;
-    blendedFee += a.etf.annualFeePct * weight;
-    blendedShock += a.etf.typicalShock * weight;
-  });
-
-  blendedReturn = Math.round(blendedReturn * 10) / 10;
-  blendedFee = Math.round(blendedFee * 100) / 100;
-  blendedShock = Math.round(blendedShock);
-
-  const mixName = allocationsAmt.map(a => `${a.pct}% ${a.etf.name}`).join(" + ");
   const updatedCur = userState.get(userId);
-  const curr = updatedCur.currency || "usd";
-
-  const sim = simulateDCA({
-    ...updatedCur,
-    annualReturnPct: blendedReturn,
-    annualFeePct: blendedFee,
-    shockPct: blendedShock,
-    shockYear: Math.min(updatedCur.years || 10, 3)
-  });
-
-  const roi = sim.contributed > 0 ? ((sim.gains / sim.contributed) * 100).toFixed(1) : "0";
-
-  const msg =
-    `🎨 <b>Portfolio Mix</b>\n\n` +
-    `<b>${mixName}</b>\n\n` +
-    `📊 Blended return: ${blendedReturn}%\n` +
-    `💰 Blended fee: ${blendedFee}%\n` +
-    `📉 Blended crash: ${blendedShock}%\n\n` +
-    `<b>Simulation (${updatedCur.years || 10} years, ${formatMoney(updatedCur.weeklyAmount || 100, curr)}/wk):</b>\n` +
-    `💵 Contributed: ${formatMoney(sim.contributed, curr)}\n` +
-    `📈 Final: ${formatMoney(sim.finalValue, curr)}\n` +
-    `✅ Gains: ${formatMoney(sim.gains, curr)} (${roi}% ROI)\n` +
-    `📉 Max drawdown: ${sim.maxDrawdownPct.toFixed(1)}%`;
-
-  const kb = Markup.inlineKeyboard([
-    [
-      Markup.button.callback("-50/wk", `mix:amt:-50:${mixShort}`),
-      Markup.button.callback("+50/wk", `mix:amt:+50:${mixShort}`),
-      Markup.button.callback("Yrs -1", `mix:yrs:-1:${mixShort}`),
-      Markup.button.callback("Yrs +1", `mix:yrs:+1:${mixShort}`)
-    ],
-    [Markup.button.callback("▶️ Full simulation", `mix:run:${mixShort}`)],
-    [
-      Markup.button.callback("60/40 VOO/BND", "mix:60voo-40bnd"),
-      Markup.button.callback("80/20 VOO/BND", "mix:80voo-20bnd")
-    ],
-    [
-      Markup.button.callback("70/30 VTI/VXUS", "mix:70vti-30vxus"),
-      Markup.button.callback("50/50 VOO/QQQ", "mix:50voo-50qqq")
-    ],
-    [Markup.button.callback("🏠 Menu", "home")]
-  ]);
+  const mixState = buildMixSimulationState(allocationsAmt, updatedCur);
+  if (!mixState) return;
+  const msg = formatMixMessage(mixState, updatedCur);
+  const kb = buildMixControlsKeyboard(mixShort, { amountButtonsWithDollar: false });
 
   try {
     await ctx.editMessageText(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
@@ -1937,75 +1860,13 @@ bot.action(/^mix:yrs:([+-]\d+):(.+)$/, async (ctx) => {
   const newYears = Math.max(1, Math.min(50, (cur.years || 10) + delta));
   userState.set(userId, { ...cur, years: newYears });
 
-  // Parse mixShort back to allocations
-  const parts = mixShort.split("-");
-  const allocations = [];
-  for (const part of parts) {
-    const match = part.match(/^(\d+)(\w+)$/);
-    if (match) {
-      const etf = ETF_PRESETS[match[2]];
-      if (etf) allocations.push({ pct: Number(match[1]), etf, name: match[2] });
-    }
-  }
-
+  const allocations = parseMixShortAllocations(mixShort);
   if (allocations.length === 0) return;
-
-  let blendedReturn = 0, blendedFee = 0, blendedShock = 0;
-  allocations.forEach(a => {
-    const weight = a.pct / 100;
-    blendedReturn += a.etf.annualReturnPct * weight;
-    blendedFee += a.etf.annualFeePct * weight;
-    blendedShock += a.etf.typicalShock * weight;
-  });
-
-  blendedReturn = Math.round(blendedReturn * 10) / 10;
-  blendedFee = Math.round(blendedFee * 100) / 100;
-  blendedShock = Math.round(blendedShock);
-
-  const mixName = allocations.map(a => `${a.pct}% ${a.etf.name}`).join(" + ");
   const updatedCur = userState.get(userId);
-  const curr = updatedCur.currency || "usd";
-
-  const sim = simulateDCA({
-    ...updatedCur,
-    annualReturnPct: blendedReturn,
-    annualFeePct: blendedFee,
-    shockPct: blendedShock,
-    shockYear: Math.min(updatedCur.years || 10, 3)
-  });
-
-  const roi = sim.contributed > 0 ? ((sim.gains / sim.contributed) * 100).toFixed(1) : "0";
-
-  const msg =
-    `🎨 <b>Portfolio Mix</b>\n\n` +
-    `<b>${mixName}</b>\n\n` +
-    `📊 Blended return: ${blendedReturn}%\n` +
-    `💰 Blended fee: ${blendedFee}%\n` +
-    `📉 Blended crash: ${blendedShock}%\n\n` +
-    `<b>Simulation (${updatedCur.years || 10} years, ${formatMoney(updatedCur.weeklyAmount || 100, curr)}/wk):</b>\n` +
-    `💵 Contributed: ${formatMoney(sim.contributed, curr)}\n` +
-    `📈 Final: ${formatMoney(sim.finalValue, curr)}\n` +
-    `✅ Gains: ${formatMoney(sim.gains, curr)} (${roi}% ROI)\n` +
-    `📉 Max drawdown: ${sim.maxDrawdownPct.toFixed(1)}%`;
-
-  const kb = Markup.inlineKeyboard([
-    [
-      Markup.button.callback("-50/wk", `mix:amt:-50:${mixShort}`),
-      Markup.button.callback("+50/wk", `mix:amt:+50:${mixShort}`),
-      Markup.button.callback("Yrs -1", `mix:yrs:-1:${mixShort}`),
-      Markup.button.callback("Yrs +1", `mix:yrs:+1:${mixShort}`)
-    ],
-    [Markup.button.callback("▶️ Full simulation", `mix:run:${mixShort}`)],
-    [
-      Markup.button.callback("60/40 VOO/BND", "mix:60voo-40bnd"),
-      Markup.button.callback("80/20 VOO/BND", "mix:80voo-20bnd")
-    ],
-    [
-      Markup.button.callback("70/30 VTI/VXUS", "mix:70vti-30vxus"),
-      Markup.button.callback("50/50 VOO/QQQ", "mix:50voo-50qqq")
-    ],
-    [Markup.button.callback("🏠 Menu", "home")]
-  ]);
+  const mixState = buildMixSimulationState(allocations, updatedCur);
+  if (!mixState) return;
+  const msg = formatMixMessage(mixState, updatedCur);
+  const kb = buildMixControlsKeyboard(mixShort, { amountButtonsWithDollar: false });
 
   try {
     await ctx.editMessageText(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
@@ -2104,5 +1965,6 @@ module.exports = {
   parseDcaCommand,
   parseCompareCommand,
   parseMixShortAllocations,
+  buildMixSimulationState,
   formatMoney
 };
