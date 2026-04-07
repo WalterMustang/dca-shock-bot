@@ -15,6 +15,7 @@ const {
   parseDcaCommand,
   parseCompareCommand,
   parseMixShortAllocations,
+  buildMixSimulationState,
   formatMoney
 } = require("./index.js");
 
@@ -405,6 +406,52 @@ test("parseMixShortAllocations filters invalid entries", () => {
   assert.strictEqual(allocations.length, 2);
   assert.strictEqual(allocations[0].name, "voo");
   assert.strictEqual(allocations[1].name, "bnd");
+});
+
+test("same allocations produce identical blended metrics across /mix, mix:amt, and mix:yrs paths", () => {
+  const allocationsFromMix = [
+    { pct: 60, name: "voo", etf: { annualReturnPct: 10.5, annualFeePct: 0.03, typicalShock: -35, name: "VOO" } },
+    { pct: 40, name: "bnd", etf: { annualReturnPct: 4, annualFeePct: 0.03, typicalShock: -10, name: "BND" } }
+  ];
+  const mixShort = "60voo-40bnd";
+  const allocationsFromCallbacks = parseMixShortAllocations(mixShort);
+  const baseState = clampParams({ weeklyAmount: 150, years: 12, currency: "usd" });
+
+  const fromMixCommand = buildMixSimulationState(allocationsFromMix, baseState);
+  const fromMixAmt = buildMixSimulationState(allocationsFromCallbacks, baseState);
+  const fromMixYrs = buildMixSimulationState(parseMixShortAllocations(mixShort), baseState);
+
+  assert.strictEqual(fromMixCommand.blendedReturn, fromMixAmt.blendedReturn);
+  assert.strictEqual(fromMixCommand.blendedReturn, fromMixYrs.blendedReturn);
+  assert.strictEqual(fromMixCommand.blendedFee, fromMixAmt.blendedFee);
+  assert.strictEqual(fromMixCommand.blendedFee, fromMixYrs.blendedFee);
+  assert.strictEqual(fromMixCommand.blendedShock, fromMixAmt.blendedShock);
+  assert.strictEqual(fromMixCommand.blendedShock, fromMixYrs.blendedShock);
+});
+
+test("parseMixShortAllocations parity with previous inline mix:yrs parsing", () => {
+  function parseMixShortInlineLegacy(mixShort) {
+    const knownEtfs = new Set(["voo", "qqq", "vti", "vxus", "bnd", "btc"]);
+    const parts = mixShort.split("-");
+    const allocations = [];
+    for (const part of parts) {
+      const match = part.match(/^(\d+)(\w+)$/);
+      if (match && knownEtfs.has(match[2])) {
+        allocations.push({ pct: Number(match[1]), name: match[2] });
+      }
+    }
+    return allocations;
+  }
+
+  const mixShort = "70vti-20vxus-10bnd";
+  const sharedParser = parseMixShortAllocations(mixShort);
+  const legacyInline = parseMixShortInlineLegacy(mixShort);
+
+  assert.strictEqual(sharedParser.length, legacyInline.length);
+  for (let i = 0; i < sharedParser.length; i++) {
+    assert.strictEqual(sharedParser[i].pct, legacyInline[i].pct);
+    assert.strictEqual(sharedParser[i].name, legacyInline[i].name);
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
