@@ -1,6 +1,9 @@
 // index.js (CommonJS, Railway-friendly, interactive buttons, Apple-ish chart, with fallbacks)
 
 const { Telegraf, Markup } = require("telegraf");
+const simulationModule = require("./src/sim/simulation");
+const parsingModule = require("./src/parsing/commands");
+const formattingModule = require("./src/ui/formatting");
 
 // Export core functions for testing (when required as module)
 const isTestMode = process.env.NODE_ENV === "test";
@@ -210,9 +213,7 @@ function clamp(value, min, max) {
  * @returns {number} Weekly rate as decimal
  */
 function weeklyRateFromAnnual(annualPct) {
-  const a = annualPct / 100;
-  if (a <= -1) return -1;
-  return Math.pow(1 + a, 1 / 52) - 1;
+  return simulationModule.weeklyRateFromAnnual(annualPct);
 }
 
 /**
@@ -221,10 +222,7 @@ function weeklyRateFromAnnual(annualPct) {
  * @returns {number} Weekly multiplier (e.g., 0.9999 for small fees)
  */
 function weeklyFeeFactorFromAnnual(feePct) {
-  const f = feePct / 100;
-  if (f <= 0) return 1;
-  if (f >= 1) return 0;
-  return Math.pow(1 - f, 1 / 52);
+  return simulationModule.weeklyFeeFactorFromAnnual(feePct);
 }
 
 /**
@@ -233,23 +231,7 @@ function weeklyFeeFactorFromAnnual(feePct) {
  * @returns {object} Validated and clamped parameters
  */
 function clampParams(p) {
-  const out = { ...DEFAULTS, ...p };
-
-  out.weeklyAmount = clamp(toNum(out.weeklyAmount, DEFAULTS.weeklyAmount), LIMITS.weeklyAmount.min, LIMITS.weeklyAmount.max);
-  out.years = clamp(toNum(out.years, DEFAULTS.years), LIMITS.years.min, LIMITS.years.max);
-  out.annualReturnPct = clamp(toNum(out.annualReturnPct, DEFAULTS.annualReturnPct), LIMITS.annualReturnPct.min, LIMITS.annualReturnPct.max);
-  out.annualFeePct = clamp(toNum(out.annualFeePct, DEFAULTS.annualFeePct), LIMITS.annualFeePct.min, LIMITS.annualFeePct.max);
-
-  const shockOn = out.shockPct !== null && out.shockYear !== null;
-  if (!shockOn) {
-    out.shockPct = null;
-    out.shockYear = null;
-  } else {
-    out.shockPct = clamp(toNum(out.shockPct, -30), LIMITS.shockPct.min, LIMITS.shockPct.max);
-    out.shockYear = clamp(toNum(out.shockYear, 3), 0, out.years);
-  }
-
-  return out;
+  return simulationModule.clampParams(p, { DEFAULTS, LIMITS, toNum, clamp });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -283,99 +265,11 @@ function clampParams(p) {
  * @returns {SimulationResult} Simulation results
  */
 function simulateDCA(params) {
-  const p = clampParams(params);
-
-  // Support both weekly and monthly contributions
-  const isMonthly = p.frequency === "monthly";
-  const periodsPerYear = isMonthly ? 12 : 52;
-  const totalPeriods = Math.max(0, Math.floor(p.years * periodsPerYear));
-
-  const rPeriod = isMonthly
-    ? Math.pow(1 + p.annualReturnPct / 100, 1 / 12) - 1
-    : weeklyRateFromAnnual(p.annualReturnPct);
-  const feeFactor = isMonthly
-    ? Math.pow(1 - p.annualFeePct / 100, 1 / 12)
-    : weeklyFeeFactorFromAnnual(p.annualFeePct);
-
-  let portfolio = 0;
-  let contributed = 0;
-
-  let peak = 0;
-  let maxDrawdown = 0;
-
-  const series = [];
-  const milestones = {};
-
-  let shockPeriod = null;
-  if (p.shockPct !== null && p.shockYear !== null) {
-    shockPeriod = Math.min(totalPeriods, Math.max(1, Math.floor(p.shockYear) * periodsPerYear));
-  }
-
-  let preShockPeak = null;
-  let recoveryPeriods = null;
-  let shockApplied = false;
-  let afterShockCounter = 0;
-
-  for (let period = 1; period <= totalPeriods; period++) {
-    portfolio += p.weeklyAmount;
-    contributed += p.weeklyAmount;
-
-    portfolio *= 1 + rPeriod;
-    if (feeFactor < 1) portfolio *= feeFactor;
-
-    if (shockPeriod !== null && period === shockPeriod) {
-      preShockPeak = peak > 0 ? peak : portfolio;
-      portfolio *= 1 + p.shockPct / 100;
-      shockApplied = true;
-      afterShockCounter = 0;
-    }
-
-    if (portfolio > peak) peak = portfolio;
-
-    if (peak > 0) {
-      const dd = (portfolio - peak) / peak;
-      if (dd < maxDrawdown) maxDrawdown = dd;
-    }
-
-    if (shockApplied && recoveryPeriods === null && preShockPeak !== null) {
-      afterShockCounter += 1;
-      if (portfolio >= preShockPeak) recoveryPeriods = afterShockCounter;
-    }
-
-    series.push(portfolio);
-
-    // Record milestones at year boundaries
-    const year = Math.floor(period / periodsPerYear);
-    if (period === year * periodsPerYear && year > 0) {
-      milestones[year] = portfolio;
-    }
-  }
-
-  // Final milestone
-  if (p.years > 0) {
-    milestones[p.years] = portfolio;
-  }
-
-  // Calculate inflation-adjusted final value
-  const inflationFactor = Math.pow(1 + (p.inflationPct || 3) / 100, p.years);
-  const inflationAdjusted = portfolio / inflationFactor;
-
-  // Convert recovery periods to weeks for display
-  const recoveryWeeks = recoveryPeriods !== null
-    ? (isMonthly ? recoveryPeriods * 4 : recoveryPeriods)
-    : null;
-
-  return {
-    params: p,
-    contributed,
-    finalValue: portfolio,
-    gains: portfolio - contributed,
-    maxDrawdownPct: maxDrawdown * 100,
-    recoveryWeeks,
-    series,
-    milestones,
-    inflationAdjusted
-  };
+  return simulationModule.simulateDCA(params, {
+    clampParams,
+    weeklyRateFromAnnual,
+    weeklyFeeFactorFromAnnual
+  });
 }
 
 /**
@@ -384,11 +278,7 @@ function simulateDCA(params) {
  * @returns {string} Formatted string (e.g., "1,234")
  */
 function formatMoney(x, currencyCode = "usd") {
-  const n = Number(x);
-  if (!Number.isFinite(n)) return "0";
-  const formatted = n.toLocaleString(undefined, { maximumFractionDigits: 0 });
-  const currency = CURRENCIES[currencyCode] || CURRENCIES.usd;
-  return `${currency.symbol}${formatted}`;
+  return formattingModule.formatMoney(x, currencyCode, { CURRENCIES });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -402,43 +292,7 @@ function formatMoney(x, currencyCode = "usd") {
  * @returns {object} Parsed and validated parameters
  */
 function parseDcaCommand(text) {
-  const parts = String(text || "").trim().split(/\s+/);
-
-  let weeklyAmount = DEFAULTS.weeklyAmount;
-  let years = DEFAULTS.years;
-  let annualReturnPct = DEFAULTS.annualReturnPct;
-  let annualFeePct = DEFAULTS.annualFeePct;
-
-  let shockPct = null;
-  let shockYear = null;
-
-  if (parts.length >= 2) weeklyAmount = toNum(parts[1], DEFAULTS.weeklyAmount);
-  if (parts.length >= 3) years = toNum(parts[2], DEFAULTS.years);
-  if (parts.length >= 4) annualReturnPct = toNum(parts[3], DEFAULTS.annualReturnPct);
-
-  for (let i = 4; i < parts.length; i++) {
-    const p = parts[i]?.toLowerCase();
-
-    if (p === "fee" && i + 1 < parts.length) {
-      annualFeePct = toNum(parts[i + 1], 0);
-      i += 1;
-      continue;
-    }
-
-    if (p === "shock" && i + 3 < parts.length) {
-      const sPct = toNum(parts[i + 1], null);
-      const at = parts[i + 2]?.toLowerCase();
-      const sYear = toNum(parts[i + 3], null);
-      if (sPct !== null && at === "at" && sYear !== null) {
-        shockPct = sPct;
-        shockYear = sYear;
-        i += 3;
-        continue;
-      }
-    }
-  }
-
-  return clampParams({ weeklyAmount, years, annualReturnPct, annualFeePct, shockPct, shockYear });
+  return parsingModule.parseDcaCommand(text, { DEFAULTS, toNum, clampParams });
 }
 
 /**
@@ -452,42 +306,7 @@ function parseDcaCommand(text) {
  * @returns {{kind: "etf", etf1: string, etf2: string} | {kind: "scenario", left: object, right: object} | {kind: "invalid"}}
  */
 function parseCompareCommand(text) {
-  const raw = String(text || "").trim();
-  const parts = raw.split(/\s+/);
-
-  // /compare <etf1> <etf2>
-  if (parts.length >= 3 && !parts.includes("vs")) {
-    return {
-      kind: "etf",
-      etf1: String(parts[1] || "voo").toLowerCase(),
-      etf2: String(parts[2] || "qqq").toLowerCase()
-    };
-  }
-
-  const vsIndex = parts.findIndex((p) => p.toLowerCase() === "vs");
-  if (vsIndex <= 1 || vsIndex >= parts.length - 1) {
-    return { kind: "invalid" };
-  }
-
-  const leftArgs = parts.slice(1, vsIndex);
-  const rightArgs = parts.slice(vsIndex + 1);
-
-  if (leftArgs.length < 3 || rightArgs.length < 3) {
-    return { kind: "invalid" };
-  }
-
-  const left = clampParams({
-    weeklyAmount: toNum(leftArgs[0], DEFAULTS.weeklyAmount),
-    years: toNum(leftArgs[1], DEFAULTS.years),
-    annualReturnPct: toNum(leftArgs[2], DEFAULTS.annualReturnPct)
-  });
-  const right = clampParams({
-    weeklyAmount: toNum(rightArgs[0], DEFAULTS.weeklyAmount),
-    years: toNum(rightArgs[1], DEFAULTS.years),
-    annualReturnPct: toNum(rightArgs[2], DEFAULTS.annualReturnPct)
-  });
-
-  return { kind: "scenario", left, right };
+  return parsingModule.parseCompareCommand(text, { DEFAULTS, toNum, clampParams });
 }
 
 
@@ -497,20 +316,7 @@ function parseCompareCommand(text) {
  * @returns {{pct:number, etf:object, name:string}[]} Parsed allocations with ETF data
  */
 function parseMixShortAllocations(mixShort) {
-  const parts = String(mixShort || "").split("-");
-  const allocations = [];
-
-  for (const part of parts) {
-    const match = part.match(/^(\d+)(\w+)$/);
-    if (!match) continue;
-
-    const etf = ETF_PRESETS[match[2]];
-    if (!etf) continue;
-
-    allocations.push({ pct: Number(match[1]), etf, name: match[2] });
-  }
-
-  return allocations;
+  return parsingModule.parseMixShortAllocations(mixShort, { ETF_PRESETS });
 }
 
 /**
@@ -520,89 +326,15 @@ function parseMixShortAllocations(mixShort) {
  * @returns {object|null}
  */
 function buildMixSimulationState(allocations, baseState = {}) {
-  if (!Array.isArray(allocations) || allocations.length === 0) return null;
-
-  let blendedReturn = 0;
-  let blendedFee = 0;
-  let blendedShock = 0;
-
-  allocations.forEach((a) => {
-    const weight = a.pct / 100;
-    blendedReturn += a.etf.annualReturnPct * weight;
-    blendedFee += a.etf.annualFeePct * weight;
-    blendedShock += a.etf.typicalShock * weight;
-  });
-
-  blendedReturn = Math.round(blendedReturn * 10) / 10;
-  blendedFee = Math.round(blendedFee * 100) / 100;
-  blendedShock = Math.round(blendedShock);
-
-  const mixName = allocations.map((a) => `${a.pct}% ${a.etf.name}`).join(" + ");
-  const mixShort = allocations.map((a) => `${a.pct}${a.name}`).join("-");
-
-  const sim = simulateDCA({
-    ...baseState,
-    annualReturnPct: blendedReturn,
-    annualFeePct: blendedFee,
-    shockPct: blendedShock,
-    shockYear: Math.min(baseState.years || 10, 3)
-  });
-
-  const roi = sim.contributed > 0 ? ((sim.gains / sim.contributed) * 100).toFixed(1) : "0";
-
-  return {
-    blendedReturn,
-    blendedFee,
-    blendedShock,
-    mixName,
-    mixShort,
-    sim,
-    roi
-  };
+  return parsingModule.buildMixSimulationState(allocations, baseState, { simulateDCA });
 }
 
 function formatMixMessage(mixState, displayState = {}) {
-  const curr = displayState.currency || "usd";
-  const years = displayState.years || 10;
-  const weeklyAmount = displayState.weeklyAmount || 100;
-
-  return (
-    `🎨 <b>Portfolio Mix</b>\n\n` +
-    `<b>${mixState.mixName}</b>\n\n` +
-    `📊 Blended return: ${mixState.blendedReturn}%\n` +
-    `💰 Blended fee: ${mixState.blendedFee}%\n` +
-    `📉 Blended crash: ${mixState.blendedShock}%\n\n` +
-    `<b>Simulation (${years} years, ${formatMoney(weeklyAmount, curr)}/wk):</b>\n` +
-    `💵 Contributed: ${formatMoney(mixState.sim.contributed, curr)}\n` +
-    `📈 Final: ${formatMoney(mixState.sim.finalValue, curr)}\n` +
-    `✅ Gains: ${formatMoney(mixState.sim.gains, curr)} (${mixState.roi}% ROI)\n` +
-    `📉 Max drawdown: ${mixState.sim.maxDrawdownPct.toFixed(1)}%`
-  );
+  return formattingModule.formatMixMessage(mixState, displayState, { formatMoney });
 }
 
 function buildMixControlsKeyboard(mixShort, options = {}) {
-  const amountButtonsWithDollar = options.amountButtonsWithDollar !== false;
-  const minusLabel = amountButtonsWithDollar ? "$-50/wk" : "-50/wk";
-  const plusLabel = amountButtonsWithDollar ? "$+50/wk" : "+50/wk";
-
-  return Markup.inlineKeyboard([
-    [
-      Markup.button.callback(minusLabel, `mix:amt:-50:${mixShort}`),
-      Markup.button.callback(plusLabel, `mix:amt:+50:${mixShort}`),
-      Markup.button.callback("Yrs -1", `mix:yrs:-1:${mixShort}`),
-      Markup.button.callback("Yrs +1", `mix:yrs:+1:${mixShort}`)
-    ],
-    [Markup.button.callback("▶️ Full simulation", `mix:run:${mixShort}`)],
-    [
-      Markup.button.callback("60/40 VOO/BND", "mix:60voo-40bnd"),
-      Markup.button.callback("80/20 VOO/BND", "mix:80voo-20bnd")
-    ],
-    [
-      Markup.button.callback("70/30 VTI/VXUS", "mix:70vti-30vxus"),
-      Markup.button.callback("50/50 VOO/QQQ", "mix:50voo-50qqq")
-    ],
-    [Markup.button.callback("🏠 Menu", "home")]
-  ]);
+  return formattingModule.buildMixControlsKeyboard(mixShort, options, { Markup });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -733,50 +465,7 @@ function quickCompareChartUrl(leftSeries, rightSeries, leftLabel, rightLabel) {
  * @returns {object} Telegraf Markup keyboard
  */
 function keyboardFor(p, options = {}) {
-  const shockOn = p.shockPct !== null && p.shockYear !== null;
-  const { cta, hasSaved } = options;
-
-  const journeyRow = [];
-  if (cta?.label && cta?.action) {
-    journeyRow.push(Markup.button.callback(cta.label, cta.action));
-  }
-  journeyRow.push(Markup.button.callback("💾 Save (session)", "save"));
-  if (hasSaved) {
-    journeyRow.push(Markup.button.callback("▶️ Run Saved (temp)", "runsaved"));
-  }
-
-  return Markup.inlineKeyboard([
-    [
-      Markup.button.callback("$-50/wk", "amt:-50"),
-      Markup.button.callback("$+50/wk", "amt:+50"),
-      Markup.button.callback("Yrs -1", "years:-1"),
-      Markup.button.callback("Yrs +1", "years:+1")
-    ],
-    [
-      Markup.button.callback("-2%", "ret:-2"),
-      Markup.button.callback("+2%", "ret:+2"),
-      Markup.button.callback(shockOn ? `${p.shockPct}%` : "Shock", "shock:toggle"),
-      Markup.button.callback(shockOn ? "Worse" : "--", shockOn ? "shockpct:-10" : "noop")
-    ],
-    [
-      Markup.button.callback("VOO", "etf:voo"),
-      Markup.button.callback("QQQ", "etf:qqq"),
-      Markup.button.callback("VTI", "etf:vti"),
-      Markup.button.callback("BTC", "etf:btc")
-    ],
-    [
-      Markup.button.callback("Base", "preset:base"),
-      Markup.button.callback("Bull", "preset:bull"),
-      Markup.button.callback("Pain", "preset:pain"),
-      Markup.button.callback("Share", "share")
-    ],
-    journeyRow.length > 0 ? journeyRow : [Markup.button.callback("💾 Save (session)", "save")],
-    [
-      Markup.button.callback("📚 ETFs", "showetf"),
-      Markup.button.callback("❓ Help", "showhelp"),
-      Markup.button.callback("✕ Close", "close")
-    ]
-  ]);
+  return formattingModule.keyboardFor(p, options, { Markup });
 }
 
 /**
@@ -785,63 +474,7 @@ function keyboardFor(p, options = {}) {
  * @returns {string} HTML-formatted caption
  */
 function buildCaption(sim) {
-  const p = sim.params;
-  const curr = p.currency || "usd";
-
-  const header = `<b>📈 DCA Shock Bot</b>`;
-  const freqLabel = p.frequency === "monthly" ? "Monthly" : "Weekly";
-  const line1 = escHtml(`${freqLabel}: ${formatMoney(p.weeklyAmount, curr)} | Years: ${p.years} | Return: ${p.annualReturnPct}%`);
-
-  const meta = [];
-  if (p.annualFeePct > 0) meta.push(`Fee: ${p.annualFeePct}%`);
-  if (p.shockPct !== null && p.shockYear !== null) meta.push(`Shock: ${p.shockPct}% @ year ${p.shockYear}`);
-  if (meta.length === 0) meta.push("Shock: off");
-  const line2 = escHtml(meta.join(" | "));
-
-  // Calculate ROI percentage
-  const roi = sim.contributed > 0 ? ((sim.gains / sim.contributed) * 100).toFixed(1) : "0.0";
-
-  const stats = [
-    `💰 Contributed: ${formatMoney(sim.contributed, curr)}`,
-    `📈 Final: ${formatMoney(sim.finalValue, curr)}`,
-    `✅ Gains: ${formatMoney(sim.gains, curr)} (${roi}% ROI)`,
-    `📉 Max drawdown: ${sim.maxDrawdownPct.toFixed(1)}%`
-  ];
-
-  // Add inflation-adjusted value
-  if (sim.inflationAdjusted) {
-    stats.push(`💵 After ${p.inflationPct || 3}% inflation: ${formatMoney(sim.inflationAdjusted, curr)}`);
-  }
-
-  if (p.shockPct !== null && p.shockYear !== null) {
-    const rec = sim.recoveryWeeks === null ? "not reached" : `${sim.recoveryWeeks} weeks`;
-    stats.push(`🔄 Recovery: ${rec}`);
-  }
-
-  // Add milestones (show 3 key ones)
-  if (sim.milestones && Object.keys(sim.milestones).length > 0) {
-    const years = Object.keys(sim.milestones).map(Number).sort((a, b) => a - b);
-    const keyYears = [];
-    if (years.length <= 3) {
-      keyYears.push(...years);
-    } else {
-      // Show first, middle, last
-      keyYears.push(years[0]);
-      keyYears.push(years[Math.floor(years.length / 2)]);
-      keyYears.push(years[years.length - 1]);
-    }
-    const milestonesStr = keyYears
-      .map(y => `Yr${y}: ${formatMoney(sim.milestones[y], curr)}`)
-      .join(" → ");
-    stats.push(`📅 ${milestonesStr}`);
-  }
-
-  const assumptions = [
-    "🧾 Assumptions: constant return, no taxes, fees as shown.",
-    "⚠️ Education only — not financial advice."
-  ];
-
-  return [header, line1, line2, "", escHtml(stats.join("\n")), "", escHtml(assumptions.join("\n"))].join("\n");
+  return formattingModule.buildCaption(sim, { escHtml, formatMoney });
 }
 
 function stripHtml(html) {
@@ -849,7 +482,7 @@ function stripHtml(html) {
 }
 
 function buildScenarioSummary(sim, curr, freqLabel) {
-  return `TL;DR: ${formatMoney(sim.params.weeklyAmount, curr)}/${freqLabel} for ${sim.params.years}y → ${formatMoney(sim.finalValue, curr)}.`;
+  return formattingModule.buildScenarioSummary(sim, curr, freqLabel, { formatMoney });
 }
 
 function getJourneyCta(state) {
@@ -1944,6 +1577,7 @@ if (!isTestMode) {
 module.exports = {
   // Constants
   PRESETS,
+  ETF_PRESETS,
   DEFAULTS,
   LIMITS,
   RATE_LIMIT,

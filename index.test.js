@@ -1,23 +1,34 @@
 // index.test.js - Unit tests for DCA Shock Bot
 
 const assert = require("assert");
+const simModule = require("./src/sim/simulation");
+const parsingModule = require("./src/parsing/commands");
+const formattingModule = require("./src/ui/formatting");
 const {
   PRESETS,
+  ETF_PRESETS,
   DEFAULTS,
   LIMITS,
   toNum,
   clamp,
-  escHtml,
-  weeklyRateFromAnnual,
-  weeklyFeeFactorFromAnnual,
-  clampParams,
-  simulateDCA,
-  parseDcaCommand,
-  parseCompareCommand,
-  parseMixShortAllocations,
-  buildMixSimulationState,
-  formatMoney
+  escHtml
 } = require("./index.js");
+
+const weeklyRateFromAnnual = simModule.weeklyRateFromAnnual;
+const weeklyFeeFactorFromAnnual = simModule.weeklyFeeFactorFromAnnual;
+const clampParams = (p) => simModule.clampParams(p, { DEFAULTS, LIMITS, toNum, clamp });
+const simulateDCA = (params) => simModule.simulateDCA(params, { clampParams, weeklyRateFromAnnual, weeklyFeeFactorFromAnnual });
+const parseDcaCommand = (text) => parsingModule.parseDcaCommand(text, { DEFAULTS, toNum, clampParams });
+const parseCompareCommand = (text) => parsingModule.parseCompareCommand(text, { DEFAULTS, toNum, clampParams });
+const parseMixShortAllocations = (mixShort) => parsingModule.parseMixShortAllocations(mixShort, { ETF_PRESETS });
+const buildMixSimulationState = (allocations, baseState) => parsingModule.buildMixSimulationState(allocations, baseState, { simulateDCA });
+const formatMoney = (x, currencyCode = "usd") => formattingModule.formatMoney(x, currencyCode, {
+  CURRENCIES: {
+    usd: { symbol: "$", name: "US Dollar", code: "USD" },
+    eur: { symbol: "€", name: "Euro", code: "EUR" },
+    chf: { symbol: "CHF ", name: "Swiss Franc", code: "CHF" }
+  }
+});
 
 // Test runner
 let passed = 0;
