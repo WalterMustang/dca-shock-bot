@@ -11,7 +11,9 @@ const {
   LIMITS,
   toNum,
   clamp,
-  escHtml
+  escHtml,
+  HELP_QUICK_ETF_TEXT,
+  HELP_ETF_RETURNS_TEXT
 } = require("./index.js");
 
 const weeklyRateFromAnnual = simModule.weeklyRateFromAnnual;
@@ -470,6 +472,16 @@ test("parseMixShortAllocations parity with previous inline mix:yrs parsing", () 
 // ─────────────────────────────────────────────────────────────────────────────
 
 console.log("\nPresets:");
+
+test("help quick ETF text reflects BTC preset return and not legacy 50%", () => {
+  assert(HELP_QUICK_ETF_TEXT.includes(`/btc - Bitcoin (${ETF_PRESETS.btc.annualReturnPct}% avg`));
+  assert(!HELP_QUICK_ETF_TEXT.includes("50% avg"));
+});
+
+test("help ETF returns summary reflects BTC preset return and not legacy 50%", () => {
+  assert(HELP_ETF_RETURNS_TEXT.includes(`BTC ${ETF_PRESETS.btc.annualReturnPct}%`));
+  assert(!HELP_ETF_RETURNS_TEXT.includes("BTC 50%"));
+});
 
 test("PRESETS.base is correctly defined", () => {
   assert.strictEqual(PRESETS.base.weeklyAmount, 100);
