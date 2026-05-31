@@ -37,7 +37,9 @@ function buildMixControlsKeyboard(mixShort, options, deps) {
   return Markup.inlineKeyboard([
     [
       Markup.button.callback(minusLabel, `mix:amt:-50:${mixShort}`),
-      Markup.button.callback(plusLabel, `mix:amt:+50:${mixShort}`),
+      Markup.button.callback(plusLabel, `mix:amt:+50:${mixShort}`)
+    ],
+    [
       Markup.button.callback("Yrs -1", `mix:yrs:-1:${mixShort}`),
       Markup.button.callback("Yrs +1", `mix:yrs:+1:${mixShort}`)
     ],
@@ -60,46 +62,54 @@ function keyboardFor(p, options, deps) {
   const shockOn = p.shockPct !== null && p.shockYear !== null;
   const { cta, hasSaved } = opts;
 
-  const journeyRow = [];
+  const journeyRows = [];
   if (cta && cta.label && cta.action) {
-    journeyRow.push(Markup.button.callback(cta.label, cta.action));
+    journeyRows.push([Markup.button.callback(cta.label, cta.action)]);
   }
-  journeyRow.push(Markup.button.callback("💾 Save (session)", "save"));
-  if (hasSaved) {
-    journeyRow.push(Markup.button.callback("▶️ Run Saved (temp)", "runsaved"));
-  }
+  journeyRows.push([
+    Markup.button.callback("💾 Save (session)", "save"),
+    ...(hasSaved ? [Markup.button.callback("▶️ Run Saved (temp)", "runsaved")] : [])
+  ]);
 
   return Markup.inlineKeyboard([
     [
       Markup.button.callback("$-50/wk", "amt:-50"),
-      Markup.button.callback("$+50/wk", "amt:+50"),
+      Markup.button.callback("$+50/wk", "amt:+50")
+    ],
+    [
       Markup.button.callback("Yrs -1", "years:-1"),
       Markup.button.callback("Yrs +1", "years:+1")
     ],
     [
       Markup.button.callback("-2%", "ret:-2"),
-      Markup.button.callback("+2%", "ret:+2"),
+      Markup.button.callback("+2%", "ret:+2")
+    ],
+    [
       Markup.button.callback(shockOn ? `${p.shockPct}%` : "Shock", "shock:toggle"),
       Markup.button.callback(shockOn ? "Worse" : "--", shockOn ? "shockpct:-10" : "noop")
     ],
     [
       Markup.button.callback("VOO", "etf:voo"),
-      Markup.button.callback("QQQ", "etf:qqq"),
+      Markup.button.callback("QQQ", "etf:qqq")
+    ],
+    [
       Markup.button.callback("VTI", "etf:vti"),
       Markup.button.callback("BTC", "etf:btc")
     ],
     [
       Markup.button.callback("Base", "preset:base"),
-      Markup.button.callback("Bull", "preset:bull"),
+      Markup.button.callback("Bull", "preset:bull")
+    ],
+    [
       Markup.button.callback("Pain", "preset:pain"),
       Markup.button.callback("Share", "share")
     ],
-    journeyRow.length > 0 ? journeyRow : [Markup.button.callback("💾 Save (session)", "save")],
+    ...journeyRows,
     [
       Markup.button.callback("📚 ETFs", "showetf"),
-      Markup.button.callback("❓ Help", "showhelp"),
-      Markup.button.callback("✕ Close", "close")
-    ]
+      Markup.button.callback("❓ Help", "showhelp")
+    ],
+    [Markup.button.callback("✕ Close", "close")]
   ]);
 }
 

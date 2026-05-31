@@ -569,38 +569,43 @@ async function renderCard(ctx, userId, params, context = {}) {
   }
 }
 
+function buildWelcomeMenu(name = "there") {
+  const safeName = escHtml(name || "there");
+  const msg =
+    `👋 Hey ${safeName}! Welcome to <b>DCA Shock Bot</b>\n\n` +
+    `Visualize weekly investing, compare crashes, and plan your next ETF step.\n\n` +
+    `<b>Start here:</b>\n` +
+    `• ETF simulation: run a quick VOO scenario\n` +
+    `• Portfolio mix: compare a simple 60/40 blend\n` +
+    `• Goal calculator: work backwards from a target\n\n` +
+    `Or type: /dca 100 10 7`;
+
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.callback("📈 ETF Simulation", "etf:voo")],
+    [
+      Markup.button.callback("🎨 Portfolio Mix", "mix:60voo-40bnd"),
+      Markup.button.callback("🎯 Goal Calculator", "goal:1000000")
+    ],
+    [
+      Markup.button.callback("📚 ETF Education", "showetf"),
+      Markup.button.callback("❓ Help", "showhelp")
+    ]
+  ]);
+
+  return { msg, kb };
+}
+
+async function replyWithWelcomeMenu(ctx) {
+  const { msg, kb } = buildWelcomeMenu(ctx.from?.first_name || "there");
+  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Bot Commands
 // ─────────────────────────────────────────────────────────────────────────────
 
 bot.start(async (ctx) => {
-  const name = ctx.from?.first_name || "there";
-  const msg =
-    `👋 Hey ${name}! Welcome to <b>DCA Shock Bot</b>\n\n` +
-    `📈 I help you visualize how <b>weekly investing</b> grows over time — and what happens when markets crash.\n\n` +
-    `<b>What is DCA?</b>\n` +
-    `Dollar Cost Averaging = investing a fixed amount every week/month, no matter the price. It's how most people build wealth.\n\n` +
-    `<b>Try it now:</b>\n` +
-    `→ Tap an ETF below to see a simulation\n` +
-    `→ Or type: /dca 100 10 7 (= $100/week, 10 years, 7% return)\n\n` +
-    `💡 <i>Tip: Use /etf to learn about different investment options</i>`;
-
-  const kb = Markup.inlineKeyboard([
-    [
-      Markup.button.callback("🇺🇸 VOO (S&P 500)", "etf:voo"),
-      Markup.button.callback("💻 QQQ (Tech)", "etf:qqq")
-    ],
-    [
-      Markup.button.callback("🌍 VTI (Total US)", "etf:vti"),
-      Markup.button.callback("₿ Bitcoin", "etf:btc")
-    ],
-    [
-      Markup.button.callback("📚 What are ETFs?", "showetf"),
-      Markup.button.callback("❓ Help", "showhelp")
-    ]
-  ]);
-
-  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+  await replyWithWelcomeMenu(ctx);
 });
 
 bot.action("showetf", async (ctx) => {
@@ -1087,71 +1092,15 @@ bot.action(/^cur:(\w+)$/, async (ctx) => {
 bot.action("close", async (ctx) => {
   try { await ctx.answerCbQuery(); } catch {}
 
-  // Delete the current message and show home menu
+  // Delete the current message and show the shared home menu.
   try { await ctx.deleteMessage(); } catch {}
 
-  const name = ctx.from?.first_name || "there";
-  const msg =
-    `👋 Hey ${name}! Welcome to <b>DCA Shock Bot</b>\n\n` +
-    `📈 I help you visualize how <b>weekly investing</b> grows over time — and what happens when markets crash.\n\n` +
-    `<b>What is DCA?</b>\n` +
-    `Dollar Cost Averaging = investing a fixed amount every week/month, no matter the price. It's how most people build wealth.\n\n` +
-    `<b>Try it now:</b>\n` +
-    `→ Tap an ETF below to see a simulation\n` +
-    `→ Or type: /dca 100 10 7 (= $100/week, 10 years, 7% return)\n\n` +
-    `💡 <i>Tip: Use /etf to learn about different investment options</i>`;
-
-  const kb = Markup.inlineKeyboard([
-    [
-      Markup.button.callback("🇺🇸 VOO (S&P 500)", "etf:voo"),
-      Markup.button.callback("💻 QQQ (Tech)", "etf:qqq")
-    ],
-    [
-      Markup.button.callback("🌍 VTI (Total US)", "etf:vti"),
-      Markup.button.callback("₿ Bitcoin", "etf:btc")
-    ],
-    [
-      Markup.button.callback("🎨 Portfolio Mix", "mix:60voo-40bnd"),
-      Markup.button.callback("🎯 Goals", "goal:1000000")
-    ],
-    [
-      Markup.button.callback("📚 What are ETFs?", "showetf"),
-      Markup.button.callback("❓ Help", "showhelp")
-    ]
-  ]);
-
-  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+  await replyWithWelcomeMenu(ctx);
 });
 
 bot.action("home", async (ctx) => {
   try { await ctx.answerCbQuery(); } catch {}
-  const name = ctx.from?.first_name || "there";
-  const msg =
-    `👋 Hey ${name}! Welcome to <b>DCA Shock Bot</b>\n\n` +
-    `📈 I help you visualize how <b>weekly investing</b> grows over time — and what happens when markets crash.\n\n` +
-    `<b>What is DCA?</b>\n` +
-    `Dollar Cost Averaging = investing a fixed amount every week/month, no matter the price. It's how most people build wealth.\n\n` +
-    `<b>Try it now:</b>\n` +
-    `→ Tap an ETF below to see a simulation\n` +
-    `→ Or type: /dca 100 10 7 (= $100/week, 10 years, 7% return)\n\n` +
-    `💡 <i>Tip: Use /etf to learn about different investment options</i>`;
-
-  const kb = Markup.inlineKeyboard([
-    [
-      Markup.button.callback("🇺🇸 VOO (S&P 500)", "etf:voo"),
-      Markup.button.callback("💻 QQQ (Tech)", "etf:qqq")
-    ],
-    [
-      Markup.button.callback("🌍 VTI (Total US)", "etf:vti"),
-      Markup.button.callback("₿ Bitcoin", "etf:btc")
-    ],
-    [
-      Markup.button.callback("📚 What are ETFs?", "showetf"),
-      Markup.button.callback("❓ Help", "showhelp")
-    ]
-  ]);
-
-  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+  await replyWithWelcomeMenu(ctx);
 });
 
 bot.action("run:default", async (ctx) => {
@@ -1606,6 +1555,9 @@ module.exports = {
   parseCompareCommand,
   parseMixShortAllocations,
   buildMixSimulationState,
+  buildWelcomeMenu,
+  keyboardFor,
+  buildMixControlsKeyboard,
   formatMoney,
   HELP_QUICK_ETF_TEXT,
   HELP_ETF_RETURNS_TEXT
