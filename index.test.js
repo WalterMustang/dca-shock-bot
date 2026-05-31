@@ -12,6 +12,9 @@ const {
   toNum,
   clamp,
   escHtml,
+  buildWelcomeMenu,
+  keyboardFor,
+  buildMixControlsKeyboard,
   HELP_QUICK_ETF_TEXT,
   HELP_ETF_RETURNS_TEXT
 } = require("./index.js");
@@ -52,6 +55,14 @@ function assertClose(actual, expected, tolerance = 0.01) {
   if (Math.abs(actual - expected) > tolerance) {
     throw new Error(`Expected ${actual} to be close to ${expected} (tolerance: ${tolerance})`);
   }
+}
+
+function inlineRows(markup) {
+  return markup.reply_markup.inline_keyboard;
+}
+
+function buttonActions(rows) {
+  return rows.flat().map((button) => button.callback_data);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -464,6 +475,65 @@ test("parseMixShortAllocations parity with previous inline mix:yrs parsing", () 
   for (let i = 0; i < sharedParser.length; i++) {
     assert.strictEqual(sharedParser[i].pct, legacyInline[i].pct);
     assert.strictEqual(sharedParser[i].name, legacyInline[i].name);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Keyboard UX Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+console.log("\nKeyboard UX:");
+
+test("welcome menu exposes the same core entry points", () => {
+  const { msg, kb } = buildWelcomeMenu("Ava");
+  const rows = inlineRows(kb);
+  const actions = buttonActions(rows);
+
+  assert(msg.includes("Ava"));
+  assert(actions.includes("etf:voo"));
+  assert(actions.includes("mix:60voo-40bnd"));
+  assert(actions.includes("goal:1000000"));
+  assert(actions.includes("showetf"));
+  assert(actions.includes("showhelp"));
+  assert(rows.every((row) => row.length <= 2));
+});
+
+test("simulation keyboard uses mobile-friendly rows without changing actions", () => {
+  const kb = keyboardFor({
+    weeklyAmount: 100,
+    years: 10,
+    annualReturnPct: 7,
+    annualFeePct: 0,
+    shockPct: -30,
+    shockYear: 3
+  }, { cta: { label: "Next", action: "journey:goal:1000000" }, hasSaved: true });
+  const rows = inlineRows(kb);
+  const actions = buttonActions(rows);
+
+  assert(rows.every((row) => row.length <= 2));
+  for (const action of [
+    "amt:-50", "amt:+50", "years:-1", "years:+1", "ret:-2", "ret:+2",
+    "shock:toggle", "shockpct:-10", "etf:voo", "etf:qqq", "etf:vti", "etf:btc",
+    "preset:base", "preset:bull", "preset:pain", "share", "save", "runsaved",
+    "showetf", "showhelp", "close", "journey:goal:1000000"
+  ]) {
+    assert(actions.includes(action), `missing ${action}`);
+  }
+});
+
+test("mix controls keyboard splits adjustment controls into mobile-friendly rows", () => {
+  const kb = buildMixControlsKeyboard("60voo-40bnd");
+  const rows = inlineRows(kb);
+  const actions = buttonActions(rows);
+
+  assert(rows.every((row) => row.length <= 2));
+  for (const action of [
+    "mix:amt:-50:60voo-40bnd", "mix:amt:+50:60voo-40bnd",
+    "mix:yrs:-1:60voo-40bnd", "mix:yrs:+1:60voo-40bnd",
+    "mix:run:60voo-40bnd", "mix:60voo-40bnd", "mix:80voo-20bnd",
+    "mix:70vti-30vxus", "mix:50voo-50qqq", "home"
+  ]) {
+    assert(actions.includes(action), `missing ${action}`);
   }
 });
 
