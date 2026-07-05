@@ -432,6 +432,25 @@ test("parseMixShortAllocations filters invalid entries", () => {
   assert.strictEqual(allocations[1].name, "bnd");
 });
 
+test("parseMixShortAllocations supports existing three-leg callback payloads", () => {
+  const allocations = parseMixShortAllocations("50voo-30qqq-20bnd");
+  assert.strictEqual(allocations.length, 3);
+  assert.deepStrictEqual(allocations.map((a) => a.pct), [50, 30, 20]);
+  assert.deepStrictEqual(allocations.map((a) => a.name), ["voo", "qqq", "bnd"]);
+});
+
+test("buildMixSimulationState preserves callback mixShort and blends weighted metrics", () => {
+  const allocations = parseMixShortAllocations("70vti-30vxus");
+  const mixState = buildMixSimulationState(allocations, clampParams({ weeklyAmount: 200, years: 8 }));
+
+  assert.strictEqual(mixState.mixShort, "70vti-30vxus");
+  assert.strictEqual(mixState.mixName, "70% VTI + 30% VXUS");
+  assert.strictEqual(mixState.blendedReturn, 8.5);
+  assert.strictEqual(mixState.blendedFee, 0.05);
+  assert.strictEqual(mixState.blendedShock, -36);
+  assert(mixState.sim.finalValue > 0);
+});
+
 test("same allocations produce identical blended metrics across /mix, mix:amt, and mix:yrs paths", () => {
   const allocationsFromMix = [
     { pct: 60, name: "voo", etf: { annualReturnPct: 10.5, annualFeePct: 0.03, typicalShock: -35, name: "VOO" } },
