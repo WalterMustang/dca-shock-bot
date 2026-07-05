@@ -338,7 +338,7 @@ function buildMixSimulationState(allocations, baseState = {}) {
 }
 
 function formatMixMessage(mixState, displayState = {}) {
-  return formattingModule.formatMixMessage(mixState, displayState, { formatMoney });
+  return formattingModule.formatMixMessage(mixState, displayState, { escHtml, formatMoney });
 }
 
 function buildMixControlsKeyboard(mixShort, options = {}) {
@@ -531,6 +531,12 @@ function stripHtml(html) {
   return String(html).replace(/<[^>]*>/g, "");
 }
 
+async function replyWithChartFallback(ctx, chart, caption, options = {}) {
+  const replyOptions = options.reply_markup ? { reply_markup: options.reply_markup } : undefined;
+  await ctx.reply(stripHtml(caption), replyOptions);
+  await ctx.reply(`Chart: ${chart}`);
+}
+
 function buildScenarioSummary(sim, curr, freqLabel) {
   return formattingModule.buildScenarioSummary(sim, curr, freqLabel, { formatMoney });
 }
@@ -590,8 +596,7 @@ async function renderCard(ctx, userId, params, context = {}) {
         await ctx.replyWithPhoto(chart, { caption, parse_mode: "HTML", reply_markup: kb.reply_markup });
       } catch (e2) {
         console.error("PHOTO SEND FAILED:", e2);
-        await ctx.reply(stripHtml(caption), { reply_markup: kb.reply_markup });
-        await ctx.reply(`Chart: ${chart}`);
+        await replyWithChartFallback(ctx, chart, caption, { reply_markup: kb.reply_markup });
       }
     }
 
@@ -606,8 +611,7 @@ async function renderCard(ctx, userId, params, context = {}) {
     await ctx.replyWithPhoto(chart, { caption, parse_mode: "HTML", reply_markup: kb.reply_markup });
   } catch (e) {
     console.error("PHOTO SEND FAILED:", e);
-    await ctx.reply(stripHtml(caption), { reply_markup: kb.reply_markup });
-    await ctx.reply(`Chart: ${chart}`);
+    await replyWithChartFallback(ctx, chart, caption, { reply_markup: kb.reply_markup });
   }
 }
 
@@ -661,9 +665,9 @@ bot.action("showetf", async (ctx) => {
   msg += "Instead of picking individual stocks, you buy the whole market.\n\n";
   msg += "<b>Popular ETFs for DCA investing:</b>\n\n";
   for (const [key, etf] of Object.entries(ETF_PRESETS)) {
-    msg += `<b>/${key.toUpperCase()}</b> - ${etf.fullName}\n`;
+    msg += `<b>/${escHtml(key.toUpperCase())}</b> - ${escHtml(etf.fullName)}\n`;
     msg += `📊 ${etf.annualReturnPct}% avg | 💰 ${etf.annualFeePct}% fee | 📉 ${etf.typicalShock}% crash\n`;
-    msg += `<i>${etf.description}</i>\n\n`;
+    msg += `<i>${escHtml(etf.description)}</i>\n\n`;
   }
   msg += "⚠️ <i>Past performance ≠ future results.</i>";
 
@@ -776,13 +780,13 @@ function sendGoal(ctx, userId, target, years, annualReturn) {
 
   const msg =
     `🎯 <b>Goal Calculator</b>\n\n` +
-    `Target: <b>${formatMoney(target, curr)}</b>\n` +
-    `Timeline: <b>${years} years</b>\n` +
-    `Expected return: <b>${annualReturn}%</b>\n\n` +
+    `Target: <b>${escHtml(formatMoney(target, curr))}</b>\n` +
+    `Timeline: <b>${escHtml(`${years} years`)}</b>\n` +
+    `Expected return: <b>${escHtml(`${annualReturn}%`)}</b>\n\n` +
     `<b>You need to invest:</b>\n` +
-    `💵 ${formatMoney(weeklyNeeded, curr)}/week\n` +
-    `💵 ${formatMoney(monthlyNeeded, curr)}/month\n\n` +
-    `<i>Tip: Try /dca ${Math.round(weeklyNeeded)} ${years} ${annualReturn} to simulate</i>`;
+    `💵 ${escHtml(formatMoney(weeklyNeeded, curr))}/week\n` +
+    `💵 ${escHtml(formatMoney(monthlyNeeded, curr))}/month\n\n` +
+    `<i>${escHtml(`Tip: Try /dca ${Math.round(weeklyNeeded)} ${years} ${annualReturn} to simulate`)}</i>`;
 
   const kb = Markup.inlineKeyboard([
     [Markup.button.callback("▶️ Simulate this", `sim:${Math.round(weeklyNeeded)}:${years}:${annualReturn}`)],
@@ -833,15 +837,15 @@ function sendCompare(ctx, userId, etf1, etf2) {
   const diff = Math.abs(sim1.finalValue - sim2.finalValue);
 
   const msg =
-    `⚖️ <b>Compare: ${preset1.name} vs ${preset2.name}</b>\n` +
-    `${formatMoney(amount, curr)}/week for ${years} years\n\n` +
-    `<b>${preset1.name}</b> (${preset1.annualReturnPct}% return)\n` +
-    `Final: ${formatMoney(sim1.finalValue, curr)} | ROI: ${roi1}%\n` +
-    `Drawdown: ${sim1.maxDrawdownPct.toFixed(1)}%\n\n` +
-    `<b>${preset2.name}</b> (${preset2.annualReturnPct}% return)\n` +
-    `Final: ${formatMoney(sim2.finalValue, curr)} | ROI: ${roi2}%\n` +
-    `Drawdown: ${sim2.maxDrawdownPct.toFixed(1)}%\n\n` +
-    `🏆 <b>${winner}</b> wins by ${formatMoney(diff, curr)}`;
+    `⚖️ <b>${escHtml(`Compare: ${preset1.name} vs ${preset2.name}`)}</b>\n` +
+    escHtml(`${formatMoney(amount, curr)}/week for ${years} years`) + `\n\n` +
+    `<b>${escHtml(preset1.name)}</b> ${escHtml(`(${preset1.annualReturnPct}% return)`)}\n` +
+    escHtml(`Final: ${formatMoney(sim1.finalValue, curr)} | ROI: ${roi1}%`) + `\n` +
+    escHtml(`Drawdown: ${sim1.maxDrawdownPct.toFixed(1)}%`) + `\n\n` +
+    `<b>${escHtml(preset2.name)}</b> ${escHtml(`(${preset2.annualReturnPct}% return)`)}\n` +
+    escHtml(`Final: ${formatMoney(sim2.finalValue, curr)} | ROI: ${roi2}%`) + `\n` +
+    escHtml(`Drawdown: ${sim2.maxDrawdownPct.toFixed(1)}%`) + `\n\n` +
+    `🏆 <b>${escHtml(winner)}</b> ${escHtml(`wins by ${formatMoney(diff, curr)}`)}`;
 
   const kb = Markup.inlineKeyboard([
     [Markup.button.callback(`▶️ ${preset1.name}`, `etf:${etf1}`), Markup.button.callback(`▶️ ${preset2.name}`, `etf:${etf2}`)],
@@ -852,7 +856,7 @@ function sendCompare(ctx, userId, etf1, etf2) {
   return ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
 }
 
-function sendScenarioCompare(ctx, userId, leftParams, rightParams) {
+async function sendScenarioCompare(ctx, userId, leftParams, rightParams) {
   const cur = userState.get(userId) || clampParams({});
   const curr = cur.currency || "usd";
 
@@ -871,15 +875,15 @@ function sendScenarioCompare(ctx, userId, leftParams, rightParams) {
 
   const msg =
     `⚖️ <b>Scenario Compare</b>\n` +
-    `A: ${formatMoney(left.params.weeklyAmount, curr)}/wk, ${left.params.years}y, ${left.params.annualReturnPct}%\n` +
-    `B: ${formatMoney(right.params.weeklyAmount, curr)}/wk, ${right.params.years}y, ${right.params.annualReturnPct}%\n\n` +
+    escHtml(`A: ${formatMoney(left.params.weeklyAmount, curr)}/wk, ${left.params.years}y, ${left.params.annualReturnPct}%`) + `\n` +
+    escHtml(`B: ${formatMoney(right.params.weeklyAmount, curr)}/wk, ${right.params.years}y, ${right.params.annualReturnPct}%`) + `\n\n` +
     `<b>Scenario A</b>\n` +
-    `Final: ${formatMoney(left.finalValue, curr)} | ROI: ${leftRoi}%\n` +
-    `Drawdown: ${left.maxDrawdownPct.toFixed(1)}%\n\n` +
+    escHtml(`Final: ${formatMoney(left.finalValue, curr)} | ROI: ${leftRoi}%`) + `\n` +
+    escHtml(`Drawdown: ${left.maxDrawdownPct.toFixed(1)}%`) + `\n\n` +
     `<b>Scenario B</b>\n` +
-    `Final: ${formatMoney(right.finalValue, curr)} | ROI: ${rightRoi}%\n` +
-    `Drawdown: ${right.maxDrawdownPct.toFixed(1)}%\n\n` +
-    `🏆 <b>${winner}</b> ahead by ${formatMoney(diff, curr)}`;
+    escHtml(`Final: ${formatMoney(right.finalValue, curr)} | ROI: ${rightRoi}%`) + `\n` +
+    escHtml(`Drawdown: ${right.maxDrawdownPct.toFixed(1)}%`) + `\n\n` +
+    `🏆 <b>${escHtml(winner)}</b> ${escHtml(`ahead by ${formatMoney(diff, curr)}`)}`;
 
   const kb = Markup.inlineKeyboard([
     [Markup.button.callback("▶️ Run Scenario A", `sim:${Math.round(left.params.weeklyAmount)}:${left.params.years}:${left.params.annualReturnPct}`)],
@@ -887,7 +891,12 @@ function sendScenarioCompare(ctx, userId, leftParams, rightParams) {
     [Markup.button.callback("✕ Close", "close")]
   ]);
 
-  return ctx.replyWithPhoto(chart, { caption: msg, parse_mode: "HTML", reply_markup: kb.reply_markup });
+  try {
+    return await ctx.replyWithPhoto(chart, { caption: msg, parse_mode: "HTML", reply_markup: kb.reply_markup });
+  } catch (e) {
+    console.error("COMPARE PHOTO SEND FAILED:", e);
+    return replyWithChartFallback(ctx, chart, msg, { reply_markup: kb.reply_markup });
+  }
 }
 
 // Compare two ETFs/scenarios side by side
@@ -1017,9 +1026,9 @@ bot.command("etf", async (ctx) => {
   msg += "Instead of picking individual stocks, you buy the whole market.\n\n";
   msg += "<b>Popular ETFs for DCA investing:</b>\n\n";
   for (const [key, etf] of Object.entries(ETF_PRESETS)) {
-    msg += `<b>/${key.toUpperCase()}</b> - ${etf.fullName}\n`;
+    msg += `<b>/${escHtml(key.toUpperCase())}</b> - ${escHtml(etf.fullName)}\n`;
     msg += `📊 ${etf.annualReturnPct}% avg return | 💰 ${etf.annualFeePct}% fee | 📉 ${etf.typicalShock}% typical crash\n`;
-    msg += `<i>${etf.description}</i>\n\n`;
+    msg += `<i>${escHtml(etf.description)}</i>\n\n`;
   }
   msg += "⚠️ <i>Past performance ≠ future results. This is for education only.</i>\n\n";
   msg += "👆 Tap an ETF to simulate:";
@@ -1092,8 +1101,8 @@ bot.action(/^cur:(\w+)$/, async (ctx) => {
 
   // Update the message to show the new selection
   const msg =
-    `💱 <b>Currency: ${currencyInfo.name}</b>\n\n` +
-    `All amounts will now be shown in ${currencyInfo.symbol}\n\n` +
+    `💱 <b>Currency: ${escHtml(currencyInfo.name)}</b>\n\n` +
+    escHtml(`All amounts will now be shown in ${currencyInfo.symbol}`) + `\n\n` +
     `<i>Note: This is for display only - no conversion is applied.</i>`;
 
   const kb = Markup.inlineKeyboard([
@@ -1280,13 +1289,13 @@ bot.action("share", async (ctx) => {
 
   const msg =
     `📊 <b>Share Your Simulation</b>\n\n` +
-    `${summaryLine}\n\n` +
-    `${formatMoney(cur.weeklyAmount, curr)}/${freqLabel} for ${cur.years} years at ${cur.annualReturnPct}%${shockInfo}\n\n` +
-    `💰 Contributed: ${formatMoney(sim.contributed, curr)}\n` +
-    `📈 Final: ${formatMoney(sim.finalValue, curr)}\n` +
-    `✅ Gains: ${formatMoney(sim.gains, curr)} (${roi}% ROI)\n` +
-    `📉 Max Drawdown: ${sim.maxDrawdownPct.toFixed(1)}%\n\n` +
-    `<b>Command:</b>\n<code>${cmd}</code>`;
+    escHtml(summaryLine) + `\n\n` +
+    escHtml(`${formatMoney(cur.weeklyAmount, curr)}/${freqLabel} for ${cur.years} years at ${cur.annualReturnPct}%${shockInfo}`) + `\n\n` +
+    escHtml(`💰 Contributed: ${formatMoney(sim.contributed, curr)}`) + `\n` +
+    escHtml(`📈 Final: ${formatMoney(sim.finalValue, curr)}`) + `\n` +
+    escHtml(`✅ Gains: ${formatMoney(sim.gains, curr)} (${roi}% ROI)`) + `\n` +
+    escHtml(`📉 Max Drawdown: ${sim.maxDrawdownPct.toFixed(1)}%`) + `\n\n` +
+    `<b>Command:</b>\n<code>${escHtml(cmd)}</code>`;
 
   const kb = Markup.inlineKeyboard([
     [Markup.button.url("🐦 Share on Twitter", twitterUrl)],

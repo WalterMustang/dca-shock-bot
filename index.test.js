@@ -497,6 +497,55 @@ test("parseMixShortAllocations parity with previous inline mix:yrs parsing", () 
   }
 });
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HTML Rendering Safety Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+console.log("\nHTML Rendering Safety:");
+
+test("buildCaption escapes dynamic currency-formatted values in HTML captions", () => {
+  const originalName = Number.prototype.toLocaleString;
+  Number.prototype.toLocaleString = function patchedLocaleString() {
+    return "<1 & 2>";
+  };
+
+  try {
+    const sim = simulateDCA(clampParams({ weeklyAmount: 100, years: 1, annualReturnPct: 7 }));
+    const caption = formattingModule.buildCaption(sim, { escHtml, formatMoney });
+
+    assert(caption.includes("&lt;1 &amp; 2&gt;"));
+    assert(!caption.includes("Weekly: $<1 & 2>"));
+  } finally {
+    Number.prototype.toLocaleString = originalName;
+  }
+});
+
+test("formatMixMessage escapes dynamic mix labels and money values", () => {
+  const mixState = {
+    mixName: "60% <VOO> & 40% BND",
+    blendedReturn: 7,
+    blendedFee: 0.03,
+    blendedShock: -25,
+    roi: "12.3",
+    sim: {
+      contributed: 1000,
+      finalValue: 1200,
+      gains: 200,
+      maxDrawdownPct: -5
+    }
+  };
+  const unsafeMoney = () => "$<100 & 200>";
+  const msg = formattingModule.formatMixMessage(mixState, { years: 5, weeklyAmount: 100, currency: "usd" }, {
+    escHtml,
+    formatMoney: unsafeMoney
+  });
+
+  assert(msg.includes("60% &lt;VOO&gt; &amp; 40% BND"));
+  assert(msg.includes("$&lt;100 &amp; 200&gt;"));
+  assert(!msg.includes("$<100 & 200>"));
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Keyboard UX Tests
 // ─────────────────────────────────────────────────────────────────────────────
