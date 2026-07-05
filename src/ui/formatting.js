@@ -9,21 +9,22 @@ function formatMoney(x, currencyCode, deps) {
 
 function formatMixMessage(mixState, displayState, deps) {
   const { formatMoney } = deps;
+  const escHtml = deps.escHtml || ((value) => String(value));
   const curr = (displayState && displayState.currency) || "usd";
   const years = (displayState && displayState.years) || 10;
   const weeklyAmount = (displayState && displayState.weeklyAmount) || 100;
 
   return (
     `🎨 <b>Portfolio Mix</b>\n\n` +
-    `<b>${mixState.mixName}</b>\n\n` +
-    `📊 Blended return: ${mixState.blendedReturn}%\n` +
-    `💰 Blended fee: ${mixState.blendedFee}%\n` +
-    `📉 Blended crash: ${mixState.blendedShock}%\n\n` +
-    `<b>Simulation (${years} years, ${formatMoney(weeklyAmount, curr)}/wk):</b>\n` +
-    `💵 Contributed: ${formatMoney(mixState.sim.contributed, curr)}\n` +
-    `📈 Final: ${formatMoney(mixState.sim.finalValue, curr)}\n` +
-    `✅ Gains: ${formatMoney(mixState.sim.gains, curr)} (${mixState.roi}% ROI)\n` +
-    `📉 Max drawdown: ${mixState.sim.maxDrawdownPct.toFixed(1)}%`
+    `<b>${escHtml(mixState.mixName)}</b>\n\n` +
+    escHtml(`📊 Blended return: ${mixState.blendedReturn}%\n`) +
+    escHtml(`💰 Blended fee: ${mixState.blendedFee}%\n`) +
+    escHtml(`📉 Blended crash: ${mixState.blendedShock}%\n\n`) +
+    `<b>${escHtml(`Simulation (${years} years, ${formatMoney(weeklyAmount, curr)}/wk):`)}</b>\n` +
+    escHtml(`💵 Contributed: ${formatMoney(mixState.sim.contributed, curr)}\n`) +
+    escHtml(`📈 Final: ${formatMoney(mixState.sim.finalValue, curr)}\n`) +
+    escHtml(`✅ Gains: ${formatMoney(mixState.sim.gains, curr)} (${mixState.roi}% ROI)\n`) +
+    escHtml(`📉 Max drawdown: ${mixState.sim.maxDrawdownPct.toFixed(1)}%`)
   );
 }
 
