@@ -345,6 +345,48 @@ function buildMixControlsKeyboard(mixShort, options = {}) {
   return formattingModule.buildMixControlsKeyboard(mixShort, options, { Markup });
 }
 
+/**
+ * Render a portfolio mix summary from the latest user state and persist blended params.
+ *
+ * @param {object} ctx - Telegraf context
+ * @param {number} userId - Telegram user ID
+ * @param {{pct:number, etf:object, name:string}[]} allocations - Valid mix allocations
+ * @param {{edit?: boolean, keyboardOptions?: object}} options - Rendering options
+ * @returns {Promise<object|null>} Rendered mix state, or null when allocations are invalid
+ */
+async function renderMixSummary(ctx, userId, allocations, options = {}) {
+  const cur = userState.get(userId) || clampParams({});
+  const mixState = buildMixSimulationState(allocations, cur);
+  if (!mixState) return null;
+
+  const nextState = {
+    ...cur,
+    annualReturnPct: mixState.blendedReturn,
+    annualFeePct: mixState.blendedFee,
+    shockPct: mixState.blendedShock,
+    shockYear: Math.min(cur.years || 10, 3),
+    _mixName: mixState.mixName,
+    lastSource: "mix"
+  };
+  userState.set(userId, nextState);
+
+  const msg = formatMixMessage(mixState, cur);
+  const kb = buildMixControlsKeyboard(mixState.mixShort, options.keyboardOptions || {});
+  const renderOptions = { parse_mode: "HTML", reply_markup: kb.reply_markup };
+
+  if (options.edit) {
+    try {
+      await ctx.editMessageText(msg, renderOptions);
+    } catch {
+      await ctx.reply(msg, renderOptions);
+    }
+  } else {
+    await ctx.reply(msg, renderOptions);
+  }
+
+  return mixState;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Chart Generation
 // ─────────────────────────────────────────────────────────────────────────────
@@ -943,26 +985,7 @@ bot.command("mix", async (ctx) => {
     allocations.forEach(a => a.pct = Math.round(a.pct * factor));
   }
 
-  const cur = userState.get(userId) || clampParams({});
-  const mixState = buildMixSimulationState(allocations, cur);
-  if (!mixState) return;
-  const msg = formatMixMessage(mixState, cur);
-
-  // Store the blended params for further adjustments
-  userState.set(userId, {
-    ...cur,
-    annualReturnPct: mixState.blendedReturn,
-    annualFeePct: mixState.blendedFee,
-    shockPct: mixState.blendedShock,
-    shockYear: Math.min(cur.years || 10, 3),
-    _mixName: mixState.mixName
-  });
-
-  const kb = buildMixControlsKeyboard(mixState.mixShort);
-
-  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
-  const curState = userState.get(userId) || clampParams({});
-  userState.set(userId, { ...curState, lastSource: "mix" });
+  await renderMixSummary(ctx, userId, allocations);
 });
 
 // ETF commands - show list or simulate specific ETF
@@ -1386,23 +1409,8 @@ bot.action(/^mix:(\d+)(\w+)-(\d+)(\w+)(?:-(\d+)(\w+))?$/, async (ctx) => {
     .map((a) => ({ ...a, etf: ETF_PRESETS[a.name] }))
     .filter((a) => Boolean(a.etf));
   if (validAllocs.length === 0) return;
-  const cur = userState.get(userId) || clampParams({});
-  const mixState = buildMixSimulationState(validAllocs, cur);
-  if (!mixState) return;
-  const msg = formatMixMessage(mixState, cur);
 
-  userState.set(userId, {
-    ...cur,
-    annualReturnPct: mixState.blendedReturn,
-    annualFeePct: mixState.blendedFee,
-    shockPct: mixState.blendedShock,
-    shockYear: Math.min(cur.years || 10, 3),
-    _mixName: mixState.mixName
-  });
-
-  const kb = buildMixControlsKeyboard(mixState.mixShort);
-
-  await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
+  await renderMixSummary(ctx, userId, validAllocs);
 });
 
 // Mix amount/years adjustment handlers
@@ -1418,22 +1426,13 @@ bot.action(/^mix:amt:([+-]\d+):(.+)$/, async (ctx) => {
   const newAmount = Math.max(0, (cur.weeklyAmount || 100) + delta);
   userState.set(userId, { ...cur, weeklyAmount: newAmount });
 
-  // Re-trigger the mix preset to refresh display
-  // Parse mixShort back to allocations (e.g., "60voo-40bnd")
   const allocationsAmt = parseMixShortAllocations(mixShort);
-
   if (allocationsAmt.length === 0) return;
-  const updatedCur = userState.get(userId);
-  const mixState = buildMixSimulationState(allocationsAmt, updatedCur);
-  if (!mixState) return;
-  const msg = formatMixMessage(mixState, updatedCur);
-  const kb = buildMixControlsKeyboard(mixShort, { amountButtonsWithDollar: false });
 
-  try {
-    await ctx.editMessageText(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
-  } catch {
-    await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
-  }
+  await renderMixSummary(ctx, userId, allocationsAmt, {
+    edit: true,
+    keyboardOptions: { amountButtonsWithDollar: false }
+  });
 });
 
 bot.action(/^mix:yrs:([+-]\d+):(.+)$/, async (ctx) => {
@@ -1450,17 +1449,11 @@ bot.action(/^mix:yrs:([+-]\d+):(.+)$/, async (ctx) => {
 
   const allocations = parseMixShortAllocations(mixShort);
   if (allocations.length === 0) return;
-  const updatedCur = userState.get(userId);
-  const mixState = buildMixSimulationState(allocations, updatedCur);
-  if (!mixState) return;
-  const msg = formatMixMessage(mixState, updatedCur);
-  const kb = buildMixControlsKeyboard(mixShort, { amountButtonsWithDollar: false });
 
-  try {
-    await ctx.editMessageText(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
-  } catch {
-    await ctx.reply(msg, { parse_mode: "HTML", reply_markup: kb.reply_markup });
-  }
+  await renderMixSummary(ctx, userId, allocations, {
+    edit: true,
+    keyboardOptions: { amountButtonsWithDollar: false }
+  });
 });
 
 // Mix full simulation (shows chart)
@@ -1555,6 +1548,7 @@ module.exports = {
   parseCompareCommand,
   parseMixShortAllocations,
   buildMixSimulationState,
+  renderMixSummary,
   buildWelcomeMenu,
   keyboardFor,
   buildMixControlsKeyboard,
