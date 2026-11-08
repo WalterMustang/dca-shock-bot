@@ -230,15 +230,16 @@ npm test
 ```
 
 ### Exported Functions (testable)
-`PRESETS`, `DEFAULTS`, `LIMITS`, `toNum`, `clamp`, `escHtml`, `weeklyRateFromAnnual`, `weeklyFeeFactorFromAnnual`, `clampParams`, `simulateDCA`, `parseDcaCommand`, `parseCompareCommand`, `formatMoney`
+`PRESETS`, `DEFAULTS`, `LIMITS`, `toNum`, `clamp`, `escHtml`, `getOwn`, `weeklyRateFromAnnual`, `weeklyFeeFactorFromAnnual`, `clampParams`, `simulateDCA`, `parseDcaCommand`, `parseCompareCommand`, `normalizeMixAllocations`, `computeGoal`, `simCallbackData`, `isFlooding`, `cleanupStaleSessions`, `formatMoney`
 
-### Test Coverage (31 tests in index.test.js)
+### Test Coverage (60 tests in index.test.js)
 - Utility functions: `toNum`, `clamp`, `escHtml`, `formatMoney`
 - Financial math: `weeklyRateFromAnnual`, `weeklyFeeFactorFromAnnual`
 - Parameter validation: `clampParams` (defaults, limits, shock, edge cases)
 - Simulation engine: `simulateDCA` (basic DCA, compound growth, fees, shock, recovery, 0 years, negative returns)
 - Command parsing: `parseDcaCommand`, `parseCompareCommand`
 - Presets: all PRESETS produce valid simulations
+- Security regressions: prototype-key lookups, mix normalization, goal clamping, callback_data length, flood guard, session expiry
 
 ### What to Test
 - Pure functions (calculations, parsing)
@@ -312,3 +313,5 @@ Users can save a scenario with the "💾 Save (session)" button. Stored in `user
 7. Don't call `ctx.deleteMessage()` without sending a replacement (use "close" action pattern)
 8. Don't forget `try { await ctx.answerCbQuery(); } catch {}` in every action handler
 9. Don't forget to save updated state: `userState.set(userId, { ...cur, updated })` after modifications
+10. Don't index lookup tables with user input directly (`ETF_PRESETS[x]`) — use `getOwn(table, x)`; callback data can be forged by custom clients
+11. Don't build callback data from unbounded numbers — Telegram rejects callback_data over 64 bytes (see `simCallbackData`)

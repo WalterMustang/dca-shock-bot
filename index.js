@@ -112,19 +112,19 @@ const RATE_LIMIT = {
   maxAge: 300_000
 };
 
+// Per-user flood guard applied to every update (commands, buttons, free text).
+// Complements the per-handler cooldowns above and bounds outbound Telegram/QuickChart traffic.
+const FLOOD_LIMIT = {
+  windowMs: 10_000,
+  maxUpdates: 20
+};
+
 // Currency support
 const CURRENCIES = {
   usd: { symbol: "$", name: "US Dollar", code: "USD" },
   eur: { symbol: "€", name: "Euro", code: "EUR" },
   chf: { symbol: "CHF ", name: "Swiss Franc", code: "CHF" }
 };
-
-// Log incoming messages (debug)
-bot.use(async (ctx, next) => {
-  const txt = ctx.message?.text;
-  if (txt) console.log("IN:", txt);
-  return next();
-});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State Management
@@ -150,28 +150,69 @@ function isRateLimited(userId, ms = RATE_LIMIT.command) {
   return false;
 }
 
+/** @type {Map<number, {windowStart:number, count:number, lastSeen:number}>} Flood-guard window + last activity per user */
+const floodState = new Map();
+
 /**
- * Periodically clean up stale entries from Maps to prevent memory leaks
+ * Fixed-window flood check. Also records the user's last activity time,
+ * which drives session expiry in cleanupStaleSessions.
+ * @param {number} userId - Telegram user ID
+ * @param {number} now - Current timestamp (injectable for tests)
+ * @returns {boolean} True if the user exceeded FLOOD_LIMIT in the current window
  */
-function cleanupStaleSessions() {
-  const now = Date.now();
+function isFlooding(userId, now = Date.now()) {
+  const entry = floodState.get(userId);
+  if (!entry || now - entry.windowStart >= FLOOD_LIMIT.windowMs) {
+    floodState.set(userId, { windowStart: now, count: 1, lastSeen: now });
+    return false;
+  }
+  entry.count += 1;
+  entry.lastSeen = now;
+  return entry.count > FLOOD_LIMIT.maxUpdates;
+}
+
+/**
+ * Periodically clean up stale entries from Maps to prevent memory leaks.
+ * Every userState entry expires based on the user's last activity, including
+ * users who only ever used handlers without a per-handler cooldown.
+ * @param {number} now - Current timestamp (injectable for tests)
+ * @returns {number} Number of user sessions removed
+ */
+function cleanupStaleSessions(now = Date.now()) {
   let cleaned = 0;
 
-  for (const [userId, timestamp] of lastCall.entries()) {
-    if (now - timestamp > RATE_LIMIT.maxAge) {
-      lastCall.delete(userId);
+  for (const userId of userState.keys()) {
+    const lastSeen = Math.max(floodState.get(userId)?.lastSeen || 0, lastCall.get(userId) || 0);
+    if (now - lastSeen > RATE_LIMIT.maxAge) {
       userState.delete(userId);
       cleaned++;
     }
   }
 
+  for (const [userId, timestamp] of lastCall.entries()) {
+    if (now - timestamp > RATE_LIMIT.maxAge) lastCall.delete(userId);
+  }
+
+  for (const [userId, entry] of floodState.entries()) {
+    if (now - entry.lastSeen > RATE_LIMIT.maxAge) floodState.delete(userId);
+  }
+
   if (cleaned > 0) {
     console.log(`Cleaned up ${cleaned} stale session(s)`);
   }
+  return cleaned;
 }
 
-// Run cleanup periodically
+// Run cleanup periodically (unref so the timer never keeps the process alive on its own)
 const cleanupTimer = setInterval(cleanupStaleSessions, RATE_LIMIT.cleanupInterval);
+if (typeof cleanupTimer.unref === "function") cleanupTimer.unref();
+
+// Drop updates from users who exceed the flood limit before any handler runs.
+bot.use(async (ctx, next) => {
+  const userId = ctx.from?.id;
+  if (userId && isFlooding(userId)) return;
+  return next();
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Utility Functions
@@ -209,6 +250,28 @@ function toNum(x, fallback) {
  */
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * Look up a key on a plain lookup table without walking the prototype chain,
+ * so user input such as "constructor" or "__proto__" never resolves.
+ * @param {object} table - Lookup table (e.g. ETF_PRESETS)
+ * @param {any} key - Untrusted key
+ * @returns {any} The own property value, or undefined
+ */
+function getOwn(table, key) {
+  return parsingModule.hasOwnKey(table, key) ? table[key] : undefined;
+}
+
+/**
+ * Log an error without dumping the full request payload (which can contain
+ * user names and message text) into the logs.
+ * @param {string} label - Log label
+ * @param {any} err - Error object
+ */
+function logError(label, err) {
+  const detail = (err && (err.description || err.message)) || String(err);
+  console.error(label, detail);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -328,6 +391,15 @@ function parseMixShortAllocations(mixShort) {
 }
 
 /**
+ * Validate, merge and rescale mix allocations to exactly 100%.
+ * @param {{pct:number, name:string}[]} allocations
+ * @returns {{pct:number, etf:object, name:string}[]}
+ */
+function normalizeMixAllocations(allocations) {
+  return parsingModule.normalizeMixAllocations(allocations, { ETF_PRESETS });
+}
+
+/**
  * Build mix simulation state from ETF allocations and base user state.
  * @param {{pct:number, etf:object, name:string}[]} allocations
  * @param {object} baseState
@@ -356,7 +428,7 @@ function buildMixControlsKeyboard(mixShort, options = {}) {
  */
 async function renderMixSummary(ctx, userId, allocations, options = {}) {
   const cur = userState.get(userId) || clampParams({});
-  const mixState = buildMixSimulationState(allocations, cur);
+  const mixState = buildMixSimulationState(normalizeMixAllocations(allocations), cur);
   if (!mixState) return null;
 
   const nextState = {
@@ -370,7 +442,7 @@ async function renderMixSummary(ctx, userId, allocations, options = {}) {
   };
   userState.set(userId, nextState);
 
-  const msg = formatMixMessage(mixState, cur);
+  const msg = formatMixMessage(mixState, mixState.sim.params);
   const kb = buildMixControlsKeyboard(mixState.mixShort, options.keyboardOptions || {});
   const renderOptions = { parse_mode: "HTML", reply_markup: kb.reply_markup };
 
@@ -565,8 +637,12 @@ function getJourneyCta(state) {
 }
 
 async function renderCard(ctx, userId, params, context = {}) {
-  const p = clampParams(params);
   const existing = userState.get(userId) || {};
+  // Currency is a display preference: keep the user's choice instead of letting
+  // DEFAULTS (merged in by parseDcaCommand / presets) reset it to USD.
+  const p = getOwn(CURRENCIES, existing.currency)
+    ? clampParams({ ...params, currency: existing.currency })
+    : clampParams(params);
   const nextState = {
     ...existing,
     ...p,
@@ -589,13 +665,13 @@ async function renderCard(ctx, userId, params, context = {}) {
         { reply_markup: kb.reply_markup }
       );
     } catch (e) {
-      console.error("EDIT MEDIA FAILED:", e);
+      logError("EDIT MEDIA FAILED:", e);
 
       // Fallback: send new message
       try {
         await ctx.replyWithPhoto(chart, { caption, parse_mode: "HTML", reply_markup: kb.reply_markup });
       } catch (e2) {
-        console.error("PHOTO SEND FAILED:", e2);
+        logError("PHOTO SEND FAILED:", e2);
         await replyWithChartFallback(ctx, chart, caption, { reply_markup: kb.reply_markup });
       }
     }
@@ -610,7 +686,7 @@ async function renderCard(ctx, userId, params, context = {}) {
   try {
     await ctx.replyWithPhoto(chart, { caption, parse_mode: "HTML", reply_markup: kb.reply_markup });
   } catch (e) {
-    console.error("PHOTO SEND FAILED:", e);
+    logError("PHOTO SEND FAILED:", e);
     await replyWithChartFallback(ctx, chart, caption, { reply_markup: kb.reply_markup });
   }
 }
@@ -736,7 +812,7 @@ bot.command("dca", async (ctx) => {
     const params = parseDcaCommand(ctx.message?.text || "/dca");
     await renderCard(ctx, userId, params, { source: "dca" });
   } catch (e) {
-    console.error("DCA ERROR FULL:", e);
+    logError("DCA ERROR:", e);
     await ctx.reply("Error running sim. Try /help");
   }
 });
@@ -763,18 +839,50 @@ bot.command("pain", async (ctx) => {
   await renderCard(ctx, userId, PRESETS.pain, { source: "preset" });
 });
 
-function sendGoal(ctx, userId, target, years, annualReturn) {
-  const weeks = years * 52;
-  const weeklyRate = Math.pow(1 + annualReturn / 100, 1 / 52) - 1;
+const GOAL_LIMITS = {
+  target: { min: 1, max: 1_000_000_000_000 },
+  years: { min: 1, max: LIMITS.years.max },
+  annualReturnPct: { min: -99, max: LIMITS.annualReturnPct.max }
+};
 
-  let weeklyNeeded;
-  if (weeklyRate === 0) {
-    weeklyNeeded = target / weeks;
-  } else {
-    weeklyNeeded = target * weeklyRate / (Math.pow(1 + weeklyRate, weeks) - 1);
-  }
+function roundTo(value, decimals) {
+  const f = Math.pow(10, decimals);
+  return Math.round(value * f) / f;
+}
 
-  const monthlyNeeded = weeklyNeeded * 52 / 12;
+/**
+ * Reverse DCA: weekly contribution needed to reach a target.
+ * Inputs are untrusted (command text / callback data) and are clamped so the
+ * result is always finite and positive.
+ * @returns {{target:number, years:number, annualReturn:number, weeklyNeeded:number, monthlyNeeded:number}}
+ */
+function computeGoal(target, years, annualReturn) {
+  const t = Math.round(clamp(toNum(target, 1_000_000), GOAL_LIMITS.target.min, GOAL_LIMITS.target.max));
+  const y = roundTo(clamp(toNum(years, 20), GOAL_LIMITS.years.min, GOAL_LIMITS.years.max), 1);
+  const r = roundTo(clamp(toNum(annualReturn, 10), GOAL_LIMITS.annualReturnPct.min, GOAL_LIMITS.annualReturnPct.max), 1);
+
+  const weeks = y * 52;
+  const weeklyRate = Math.pow(1 + r / 100, 1 / 52) - 1;
+  const weeklyNeeded = weeklyRate === 0
+    ? t / weeks
+    : t * weeklyRate / (Math.pow(1 + weeklyRate, weeks) - 1);
+
+  return { target: t, years: y, annualReturn: r, weeklyNeeded, monthlyNeeded: weeklyNeeded * 52 / 12 };
+}
+
+/**
+ * Build `sim:<weekly>:<years>:<return>` callback data that always matches the
+ * sim action pattern and stays well under Telegram's 64-byte limit.
+ */
+function simCallbackData(weekly, years, annualReturn) {
+  const w = Math.round(clamp(toNum(weekly, 0), LIMITS.weeklyAmount.min, LIMITS.weeklyAmount.max));
+  const y = roundTo(clamp(toNum(years, DEFAULTS.years), LIMITS.years.min, LIMITS.years.max), 2);
+  const r = roundTo(clamp(toNum(annualReturn, DEFAULTS.annualReturnPct), LIMITS.annualReturnPct.min, LIMITS.annualReturnPct.max), 2);
+  return `sim:${w}:${y}:${r}`;
+}
+
+function sendGoal(ctx, userId, rawTarget, rawYears, rawAnnualReturn) {
+  const { target, years, annualReturn, weeklyNeeded, monthlyNeeded } = computeGoal(rawTarget, rawYears, rawAnnualReturn);
   const cur = userState.get(userId) || clampParams({});
   const curr = cur.currency || "usd";
 
@@ -789,7 +897,7 @@ function sendGoal(ctx, userId, target, years, annualReturn) {
     `<i>${escHtml(`Tip: Try /dca ${Math.round(weeklyNeeded)} ${years} ${annualReturn} to simulate`)}</i>`;
 
   const kb = Markup.inlineKeyboard([
-    [Markup.button.callback("▶️ Simulate this", `sim:${Math.round(weeklyNeeded)}:${years}:${annualReturn}`)],
+    [Markup.button.callback("▶️ Simulate this", simCallbackData(weeklyNeeded, years, annualReturn))],
     [Markup.button.callback("🎯 $500k goal", "goal:500000"), Markup.button.callback("🎯 $1M goal", "goal:1000000")],
     [Markup.button.callback("✕ Close", "close")]
   ]);
@@ -815,8 +923,8 @@ bot.command("goal", async (ctx) => {
 });
 
 function sendCompare(ctx, userId, etf1, etf2) {
-  const preset1 = ETF_PRESETS[etf1];
-  const preset2 = ETF_PRESETS[etf2];
+  const preset1 = getOwn(ETF_PRESETS, etf1);
+  const preset2 = getOwn(ETF_PRESETS, etf2);
 
   if (!preset1 || !preset2) {
     return ctx.reply("Usage: /compare voo qqq\nAvailable: voo, qqq, vti, vxus, bnd, btc");
@@ -886,15 +994,15 @@ async function sendScenarioCompare(ctx, userId, leftParams, rightParams) {
     `🏆 <b>${escHtml(winner)}</b> ${escHtml(`ahead by ${formatMoney(diff, curr)}`)}`;
 
   const kb = Markup.inlineKeyboard([
-    [Markup.button.callback("▶️ Run Scenario A", `sim:${Math.round(left.params.weeklyAmount)}:${left.params.years}:${left.params.annualReturnPct}`)],
-    [Markup.button.callback("▶️ Run Scenario B", `sim:${Math.round(right.params.weeklyAmount)}:${right.params.years}:${right.params.annualReturnPct}`)],
+    [Markup.button.callback("▶️ Run Scenario A", simCallbackData(left.params.weeklyAmount, left.params.years, left.params.annualReturnPct))],
+    [Markup.button.callback("▶️ Run Scenario B", simCallbackData(right.params.weeklyAmount, right.params.years, right.params.annualReturnPct))],
     [Markup.button.callback("✕ Close", "close")]
   ]);
 
   try {
     return await ctx.replyWithPhoto(chart, { caption: msg, parse_mode: "HTML", reply_markup: kb.reply_markup });
   } catch (e) {
-    console.error("COMPARE PHOTO SEND FAILED:", e);
+    logError("COMPARE PHOTO SEND FAILED:", e);
     return replyWithChartFallback(ctx, chart, msg, { reply_markup: kb.reply_markup });
   }
 }
@@ -967,31 +1075,16 @@ bot.command("mix", async (ctx) => {
 
   const args = (ctx.message?.text || "").trim().split(/\s+/).slice(1);
 
-  // Parse pairs of: percentage etfname
-  const allocations = [];
-  let totalPct = 0;
-
+  // Parse pairs of: percentage etfname (validated, merged and rescaled to 100%)
+  const pairs = [];
   for (let i = 0; i < args.length; i += 2) {
-    const pct = toNum(args[i], 0);
-    const etfName = args[i + 1]?.toLowerCase();
-
-    if (pct > 0 && etfName && ETF_PRESETS[etfName]) {
-      allocations.push({ pct, etf: ETF_PRESETS[etfName], name: etfName });
-      totalPct += pct;
-    }
+    pairs.push({ pct: toNum(args[i], 0), name: String(args[i + 1] || "").toLowerCase() });
   }
+  let allocations = normalizeMixAllocations(pairs);
 
   // Default to 60/40 VOO/BND if no valid input
   if (allocations.length === 0) {
-    allocations.push({ pct: 60, etf: ETF_PRESETS.voo, name: "voo" });
-    allocations.push({ pct: 40, etf: ETF_PRESETS.bnd, name: "bnd" });
-    totalPct = 100;
-  }
-
-  // Normalize to 100% if needed
-  if (totalPct !== 100) {
-    const factor = 100 / totalPct;
-    allocations.forEach(a => a.pct = Math.round(a.pct * factor));
+    allocations = normalizeMixAllocations([{ pct: 60, name: "voo" }, { pct: 40, name: "bnd" }]);
   }
 
   await renderMixSummary(ctx, userId, allocations);
@@ -1007,8 +1100,8 @@ bot.command("etf", async (ctx) => {
   const etfName = args[1]?.toLowerCase();
 
   // If specific ETF requested
-  if (etfName && ETF_PRESETS[etfName]) {
-    const etf = ETF_PRESETS[etfName];
+  const etf = getOwn(ETF_PRESETS, etfName);
+  if (etf) {
     const cur = userState.get(userId) || clampParams({});
     await renderCard(ctx, userId, {
       ...cur,
@@ -1088,7 +1181,7 @@ bot.action(/^cur:(\w+)$/, async (ctx) => {
   if (!userId) return;
 
   const newCurrency = ctx.match[1];
-  if (!CURRENCIES[newCurrency]) {
+  if (!getOwn(CURRENCIES, newCurrency)) {
     try { await ctx.answerCbQuery("Unknown currency"); } catch {}
     return;
   }
@@ -1138,14 +1231,16 @@ bot.action("home", async (ctx) => {
 bot.action("run:default", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
   await renderCard(ctx, userId, PRESETS.base, { source: "preset" });
 });
 
 bot.action(/^preset:(.+)$/, async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
 
-  const preset = PRESETS[ctx.match[1]];
+  const preset = getOwn(PRESETS, ctx.match[1]);
   if (preset) {
     return renderCard(ctx, userId, preset, { source: "preset" });
   }
@@ -1161,7 +1256,7 @@ bot.action(/^etf:(.+)$/, async (ctx) => {
   if (isRateLimited(userId, RATE_LIMIT.button)) return;
 
   const etfKey = ctx.match[1];
-  const etf = ETF_PRESETS[etfKey];
+  const etf = getOwn(ETF_PRESETS, etfKey);
   if (!etf) {
     try { await ctx.answerCbQuery("Unknown ETF"); } catch {}
     return;
@@ -1204,7 +1299,7 @@ bot.action(/^amt:([+-]\d+)$/, async (ctx) => {
 
   const cur = userState.get(userId) || clampParams({});
   const delta = Number(ctx.match[1]);
-  await renderCard(ctx, userId, { ...cur, weeklyAmount: Math.max(0, (cur.weeklyAmount || 0) + delta) });
+  await renderCard(ctx, userId, { ...cur, weeklyAmount: clamp((cur.weeklyAmount || 0) + delta, LIMITS.weeklyAmount.min, LIMITS.weeklyAmount.max) });
 });
 
 bot.action(/^shockpct:([+-]\d+)$/, async (ctx) => {
@@ -1255,6 +1350,7 @@ bot.action(/^shockyear:([+-]\d+)$/, async (ctx) => {
 bot.action("share", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
 
   const cur = userState.get(userId);
   if (!cur) {
@@ -1328,6 +1424,7 @@ bot.action("save", async (ctx) => {
 bot.action("runsaved", async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
 
   const cur = userState.get(userId);
   if (!cur?.savedScenario) {
@@ -1341,6 +1438,7 @@ bot.action("runsaved", async (ctx) => {
 bot.action(/^journey:compare:(\w+):(\w+)$/, async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
   try { await ctx.answerCbQuery(); } catch {}
 
   const etf1 = ctx.match[1];
@@ -1353,6 +1451,7 @@ bot.action(/^journey:compare:(\w+):(\w+)$/, async (ctx) => {
 bot.action(/^journey:goal:(\d+)$/, async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
   try { await ctx.answerCbQuery(); } catch {}
 
   await sendGoal(ctx, userId, Number(ctx.match[1]), 20, 10);
@@ -1364,6 +1463,7 @@ bot.action(/^journey:goal:(\d+)$/, async (ctx) => {
 bot.action(/^goal:(\d+)$/, async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
   try { await ctx.answerCbQuery(); } catch {}
 
   const target = Number(ctx.match[1]);
@@ -1375,9 +1475,10 @@ bot.action(/^goal:(\d+)$/, async (ctx) => {
 });
 
 // Simulate from goal
-bot.action(/^sim:(\d+):(\d+):(\d+)$/, async (ctx) => {
+bot.action(/^sim:(\d+):(\d+(?:\.\d+)?):(-?\d+(?:\.\d+)?)$/, async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
   try { await ctx.answerCbQuery(); } catch {}
 
   const weekly = Number(ctx.match[1]);
@@ -1391,6 +1492,7 @@ bot.action(/^sim:(\d+):(\d+):(\d+)$/, async (ctx) => {
 bot.action(/^cmp:(\w+):(\w+)$/, async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
   try { await ctx.answerCbQuery(); } catch {}
 
   const etf1 = ctx.match[1];
@@ -1404,6 +1506,7 @@ bot.action(/^cmp:(\w+):(\w+)$/, async (ctx) => {
 bot.action(/^mix:(\d+)(\w+)-(\d+)(\w+)(?:-(\d+)(\w+))?$/, async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
   try { await ctx.answerCbQuery(); } catch {}
 
   // Parse allocation: e.g., "60voo-40bnd" or "50voo-30qqq-20bnd"
@@ -1414,9 +1517,7 @@ bot.action(/^mix:(\d+)(\w+)-(\d+)(\w+)(?:-(\d+)(\w+))?$/, async (ctx) => {
     allocations.push({ pct: Number(ctx.match[5]), name: ctx.match[6] });
   }
 
-  const validAllocs = allocations
-    .map((a) => ({ ...a, etf: ETF_PRESETS[a.name] }))
-    .filter((a) => Boolean(a.etf));
+  const validAllocs = normalizeMixAllocations(allocations);
   if (validAllocs.length === 0) return;
 
   await renderMixSummary(ctx, userId, validAllocs);
@@ -1426,13 +1527,14 @@ bot.action(/^mix:(\d+)(\w+)-(\d+)(\w+)(?:-(\d+)(\w+))?$/, async (ctx) => {
 bot.action(/^mix:amt:([+-]\d+):(.+)$/, async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
   try { await ctx.answerCbQuery(); } catch {}
 
   const delta = Number(ctx.match[1]);
   const mixShort = ctx.match[2];
 
   const cur = userState.get(userId) || clampParams({});
-  const newAmount = Math.max(0, (cur.weeklyAmount || 100) + delta);
+  const newAmount = clamp((cur.weeklyAmount || 100) + delta, LIMITS.weeklyAmount.min, LIMITS.weeklyAmount.max);
   userState.set(userId, { ...cur, weeklyAmount: newAmount });
 
   const allocationsAmt = parseMixShortAllocations(mixShort);
@@ -1447,13 +1549,14 @@ bot.action(/^mix:amt:([+-]\d+):(.+)$/, async (ctx) => {
 bot.action(/^mix:yrs:([+-]\d+):(.+)$/, async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
   try { await ctx.answerCbQuery(); } catch {}
 
   const delta = Number(ctx.match[1]);
   const mixShort = ctx.match[2];
 
   const cur = userState.get(userId) || clampParams({});
-  const newYears = Math.max(1, Math.min(50, (cur.years || 10) + delta));
+  const newYears = clamp((cur.years || 10) + delta, 1, LIMITS.years.max);
   userState.set(userId, { ...cur, years: newYears });
 
   const allocations = parseMixShortAllocations(mixShort);
@@ -1469,6 +1572,7 @@ bot.action(/^mix:yrs:([+-]\d+):(.+)$/, async (ctx) => {
 bot.action(/^mix:run:(.+)$/, async (ctx) => {
   const userId = ctx.from?.id;
   if (!userId) return;
+  if (isRateLimited(userId, RATE_LIMIT.button)) return;
 
   const cur = userState.get(userId);
   if (!cur) {
@@ -1487,7 +1591,7 @@ bot.on("text", async (ctx) => {
   await ctx.reply("Type /help or /dca 100 10 8");
 });
 
-bot.catch((err) => console.error("BOT ERROR:", err));
+bot.catch((err, ctx) => logError(`BOT ERROR (${ctx?.updateType || "unknown"}):`, err));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Startup & Graceful Shutdown
@@ -1538,11 +1642,27 @@ module.exports = {
   DEFAULTS,
   LIMITS,
   RATE_LIMIT,
+  FLOOD_LIMIT,
+  GOAL_LIMITS,
+  CURRENCIES,
 
   // Utility functions
   toNum,
   clamp,
   escHtml,
+  getOwn,
+
+  // Abuse protection & session lifecycle
+  isFlooding,
+  isRateLimited,
+  cleanupStaleSessions,
+  userState,
+  lastCall,
+  floodState,
+
+  // Goal calculator
+  computeGoal,
+  simCallbackData,
 
   // Financial calculations
   weeklyRateFromAnnual,
@@ -1556,6 +1676,7 @@ module.exports = {
   parseDcaCommand,
   parseCompareCommand,
   parseMixShortAllocations,
+  normalizeMixAllocations,
   buildMixSimulationState,
   renderMixSummary,
   buildWelcomeMenu,

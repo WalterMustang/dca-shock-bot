@@ -136,6 +136,22 @@ assert.strictEqual(formatMoney(1234, "eur"), "€1,234");
 
 ---
 
+## Security Lessons
+
+### Problem: `/etf constructor` and `cur:constructor` were accepted
+**Cause**: `ETF_PRESETS[userInput]` walks the prototype chain, so `constructor`, `__proto__`, `toString` are truthy
+**Fix**: `getOwn(ETF_PRESETS, key)` (own-property check). Callback data is untrusted: custom Telegram clients can send any string.
+
+### Problem: Goal "Simulate this" button silently broken / message failed with BUTTON_DATA_INVALID
+**Cause**: callback data built from raw floats (`7.5`, `Infinity`, `1e+297`) didn't match `sim:(\d+)...` or exceeded 64 bytes
+**Fix**: clamp + round via `computeGoal` / `simCallbackData`
+
+### Problem: userState never expired for button-only users
+**Cause**: cleanup iterated `lastCall`, which is only set by handlers that call `isRateLimited`
+**Fix**: flood-guard middleware records `lastSeen` for every update; cleanup iterates `userState`
+
+---
+
 ## General Lessons
 
 1. **Always run tests before committing** - `npm test`
