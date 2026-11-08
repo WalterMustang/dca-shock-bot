@@ -16,7 +16,19 @@ const {
   keyboardFor,
   buildMixControlsKeyboard,
   HELP_QUICK_ETF_TEXT,
-  HELP_ETF_RETURNS_TEXT
+  HELP_ETF_RETURNS_TEXT,
+  RATE_LIMIT,
+  FLOOD_LIMIT,
+  CURRENCIES,
+  getOwn,
+  isFlooding,
+  cleanupStaleSessions,
+  userState,
+  lastCall,
+  floodState,
+  computeGoal,
+  simCallbackData,
+  normalizeMixAllocations
 } = require("./index.js");
 
 const weeklyRateFromAnnual = simModule.weeklyRateFromAnnual;
@@ -646,6 +658,142 @@ test("All presets produce valid simulations", () => {
     assert(result.finalValue > 0, `${name} should produce positive final value`);
     assert(result.series.length > 0, `${name} should produce series data`);
   }
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Security regression tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+console.log("\nSecurity regressions:");
+
+test("getOwn ignores prototype-chain keys", () => {
+  for (const key of ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"]) {
+    assert.strictEqual(getOwn(ETF_PRESETS, key), undefined, `ETF_PRESETS.${key}`);
+    assert.strictEqual(getOwn(PRESETS, key), undefined, `PRESETS.${key}`);
+    assert.strictEqual(getOwn(CURRENCIES, key), undefined, `CURRENCIES.${key}`);
+  }
+  assert.strictEqual(getOwn(ETF_PRESETS, "voo"), ETF_PRESETS.voo);
+  assert.strictEqual(getOwn(ETF_PRESETS, undefined), undefined);
+});
+
+test("formatMoney falls back to USD for prototype-chain currency codes", () => {
+  assert.strictEqual(formatMoney(1000, "constructor"), "$1,000");
+  assert.strictEqual(formatMoney(1000, "__proto__"), "$1,000");
+});
+
+test("parseMixShortAllocations rejects prototype-chain ETF names", () => {
+  const allocs = parseMixShortAllocations("50constructor-50voo");
+  assert.deepStrictEqual(allocs.map((a) => [a.name, a.pct]), [["voo", 100]]);
+  assert.strictEqual(parseMixShortAllocations("50__proto__-50tostring").length, 0);
+});
+
+test("normalizeMixAllocations rescales forged/unnormalized percentages to 100", () => {
+  const allocs = normalizeMixAllocations([{ pct: 99999, name: "voo" }, { pct: 1, name: "bnd" }]);
+  assert.strictEqual(allocs.reduce((s, a) => s + a.pct, 0), 100);
+  const mix = buildMixSimulationState(allocs, clampParams({}));
+  assert(mix.blendedReturn <= ETF_PRESETS.voo.annualReturnPct, "blended return must stay within component returns");
+  assert(mix.blendedShock >= -100, "blended crash must be a valid percentage");
+});
+
+test("normalizeMixAllocations sums to exactly 100 with rounding", () => {
+  const allocs = normalizeMixAllocations([{ pct: 33.3, name: "voo" }, { pct: 33.3, name: "qqq" }, { pct: 33.3, name: "bnd" }]);
+  assert.strictEqual(allocs.reduce((s, a) => s + a.pct, 0), 100);
+});
+
+test("normalizeMixAllocations rejects non-finite, zero and negative percentages", () => {
+  assert.strictEqual(normalizeMixAllocations([{ pct: Infinity, name: "voo" }]).length, 0);
+  assert.strictEqual(normalizeMixAllocations([{ pct: -50, name: "voo" }, { pct: 0, name: "bnd" }]).length, 0);
+  const huge = normalizeMixAllocations([{ pct: 1e308, name: "voo" }, { pct: 1e308, name: "bnd" }]);
+  assert.strictEqual(huge.length, 0, "overflowing totals are rejected instead of producing 0% allocations");
+});
+
+test("normalizeMixAllocations merges duplicates so mix callback_data stays <= 64 bytes", () => {
+  const pairs = [];
+  for (let i = 0; i < 300; i++) pairs.push({ pct: 1, name: Object.keys(ETF_PRESETS)[i % 6] });
+  const allocs = normalizeMixAllocations(pairs);
+  assert(allocs.length <= Object.keys(ETF_PRESETS).length);
+  const mix = buildMixSimulationState(allocs, clampParams({}));
+  const rows = buildMixControlsKeyboard(mix.mixShort).reply_markup.inline_keyboard;
+  for (const row of rows) for (const b of row) {
+    assert(Buffer.byteLength(b.callback_data) <= 64, `callback_data too long: ${b.callback_data}`);
+  }
+});
+
+test("computeGoal always returns finite, positive contributions", () => {
+  const cases = [
+    [1000000, 0, 10],
+    [1000, 10, -150],
+    [-1000000, 20, 10],
+    [-1.2345678901234567e300, 10.123456789012345, 7.123456789012345],
+    [Infinity, NaN, "abc"],
+    [1e300, 1e300, 1e300]
+  ];
+  for (const [t, y, r] of cases) {
+    const g = computeGoal(t, y, r);
+    assert(Number.isFinite(g.weeklyNeeded) && g.weeklyNeeded >= 0, `weekly for ${t},${y},${r}: ${g.weeklyNeeded}`);
+    assert(Number.isFinite(g.monthlyNeeded) && g.monthlyNeeded >= 0);
+    assert(g.years >= 1 && g.years <= LIMITS.years.max);
+    assert(g.target >= 1);
+  }
+});
+
+test("computeGoal keeps normal results unchanged", () => {
+  const g = computeGoal(1000000, 20, 10);
+  assert.strictEqual(g.target, 1000000);
+  assert.strictEqual(g.years, 20);
+  assert.strictEqual(g.annualReturn, 10);
+  assertClose(g.weeklyNeeded, 320.31, 0.01); // same as pre-fix formula
+});
+
+test("simCallbackData matches the sim action pattern and fits in 64 bytes", () => {
+  const simPattern = /^sim:(\d+):(\d+(?:\.\d+)?):(-?\d+(?:\.\d+)?)$/;
+  const cases = [
+    [429.3, 20, 7.5],
+    [Infinity, 0, 10],
+    [NaN, 10, -150],
+    [-1.6e297, 10.123456789012344, 7.123456789012345],
+    [1e12, 49.99999999999, -99.9999999999]
+  ];
+  for (const [w, y, r] of cases) {
+    const data = simCallbackData(w, y, r);
+    assert(simPattern.test(data), `pattern mismatch: ${data}`);
+    assert(Buffer.byteLength(data) <= 64, `too long: ${data}`);
+  }
+  assert.strictEqual(simCallbackData(429.3, 20, 7.5), "sim:429:20:7.5");
+});
+
+test("isFlooding allows normal use and blocks bursts above FLOOD_LIMIT", () => {
+  const uid = -101;
+  const t0 = 1_000_000;
+  for (let i = 0; i < FLOOD_LIMIT.maxUpdates; i++) {
+    assert.strictEqual(isFlooding(uid, t0 + i), false, `update ${i + 1} should pass`);
+  }
+  assert.strictEqual(isFlooding(uid, t0 + 100), true, "burst above limit should be blocked");
+  assert.strictEqual(isFlooding(uid, t0 + FLOOD_LIMIT.windowMs + 1), false, "new window resets the counter");
+  floodState.delete(uid);
+});
+
+test("cleanupStaleSessions expires state for users who never hit a cooldown", () => {
+  const uid = -202;
+  const t0 = 5_000_000;
+  isFlooding(uid, t0);              // flood middleware records activity
+  userState.set(uid, clampParams({}));
+  assert.strictEqual(lastCall.has(uid), false, "precondition: no per-handler cooldown entry");
+
+  cleanupStaleSessions(t0 + 1000);
+  assert(userState.has(uid), "active session must be kept");
+
+  cleanupStaleSessions(t0 + RATE_LIMIT.maxAge + 1);
+  assert.strictEqual(userState.has(uid), false, "stale session must be removed");
+  assert.strictEqual(floodState.has(uid), false, "flood entry must be removed");
+});
+
+test("cleanupStaleSessions removes orphaned state with no activity record", () => {
+  const uid = -303;
+  userState.set(uid, clampParams({}));
+  cleanupStaleSessions(Date.now());
+  assert.strictEqual(userState.has(uid), false);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

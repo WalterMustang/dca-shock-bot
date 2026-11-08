@@ -1,7 +1,7 @@
 # Progress Log
 # Update this file after each session to maintain context
 
-## Last Updated: 2026-02-02
+## Last Updated: 2026-11-08
 
 ## Current Status: FEATURE COMPLETE
 
@@ -51,6 +51,18 @@
 - Added currency support (USD, EUR, CHF)
 - Created documentation (PRD, APP_FLOW, etc.)
 
+### Session 9 - Security Audit (2026-11-08)
+- Global per-user flood guard (FLOOD_LIMIT, 20 updates / 10s) + button cooldowns on all render actions
+- Session cleanup now expires every userState entry by last activity (previous leak for button-only users)
+- Own-property lookups (getOwn / hasOwnKey) for ETF_PRESETS, PRESETS, CURRENCIES
+- Mix allocations validated, merged, rescaled to exactly 100% (normalizeMixAllocations)
+- /goal inputs clamped (computeGoal); sim:* callback data built by simCallbackData (decimals/negatives work, <=64 bytes)
+- Clamped mix:amt / amt state; mix message shows the params actually simulated
+- Currency preference no longer reset to USD by /dca and presets
+- Removed logging of every user message; errors logged without request payloads
+- Dockerfile: npm ci, non-root user, node as PID 1; .dockerignore excludes .git/.env*/tests
+- 60 passing tests (13 new security regression tests)
+
 ---
 
 ## What's Working
@@ -59,11 +71,12 @@
 - Chart generation
 - Twitter share
 - All buttons and navigation
-- 31 passing tests
+- 60 passing tests
 
 ## Known Issues
-- mix:amt handler has variable naming inconsistency (allocationsAmt vs allocations on line 1518)
 - Some duplicate code in mix adjustment handlers
+- In group chats any member can press buttons on another user's card (edits/deletes that card); no per-card owner check
+- /dca and presets reset frequency to weekly (currency is preserved)
 
 ## Next Session Should
 1. Read this file first

@@ -3,7 +3,8 @@ function formatMoney(x, currencyCode, deps) {
   const n = Number(x);
   if (!Number.isFinite(n)) return "0";
   const formatted = n.toLocaleString(undefined, { maximumFractionDigits: 0 });
-  const currency = CURRENCIES[currencyCode] || CURRENCIES.usd;
+  const known = typeof currencyCode === "string" && Object.prototype.hasOwnProperty.call(CURRENCIES, currencyCode);
+  const currency = known ? CURRENCIES[currencyCode] : CURRENCIES.usd;
   return `${currency.symbol}${formatted}`;
 }
 

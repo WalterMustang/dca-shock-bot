@@ -1,11 +1,15 @@
 FROM node:20-alpine
 
+ENV NODE_ENV=production
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install --omit=dev
+RUN npm ci --omit=dev && npm cache clean --force
 
+COPY --chown=node:node . .
 
-COPY . .
+# Drop root privileges
+USER node
 
-CMD ["npm", "start"]
+# Run node directly so SIGTERM/SIGINT reach the graceful shutdown handlers
+CMD ["node", "index.js"]

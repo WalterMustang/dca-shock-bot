@@ -78,22 +78,59 @@ function parseCompareCommand(text, deps) {
   return { kind: "scenario", left, right };
 }
 
-function parseMixShortAllocations(mixShort, deps) {
+function hasOwnKey(obj, key) {
+  return obj != null && typeof key === "string" && Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+/**
+ * Validate and normalize mix allocations:
+ * - drops entries with unknown ETFs (own keys only, no prototype lookups) or non-positive/non-finite pct
+ * - merges duplicate ETFs
+ * - rescales to exactly 100% using largest-remainder rounding
+ * The number of distinct ETFs is bounded by ETF_PRESETS, which keeps callback_data short.
+ */
+function normalizeMixAllocations(allocations, deps) {
   const { ETF_PRESETS } = deps;
+  if (!Array.isArray(allocations)) return [];
+
+  const merged = new Map();
+  for (const a of allocations) {
+    const name = a && String(a.name || "").toLowerCase();
+    const pct = Number(a && a.pct);
+    if (!hasOwnKey(ETF_PRESETS, name)) continue;
+    if (!Number.isFinite(pct) || pct <= 0) continue;
+    merged.set(name, (merged.get(name) || 0) + pct);
+  }
+
+  const total = [...merged.values()].reduce((sum, pct) => sum + pct, 0);
+  if (merged.size === 0 || !Number.isFinite(total) || total <= 0) return [];
+
+  const scaled = [...merged.entries()].map(([name, pct]) => {
+    const exact = (pct / total) * 100;
+    return { name, floor: Math.floor(exact), rem: exact - Math.floor(exact) };
+  });
+  let remaining = 100 - scaled.reduce((sum, s) => sum + s.floor, 0);
+  const byRemainder = [...scaled].sort((a, b) => b.rem - a.rem);
+  for (let i = 0; remaining > 0 && i < byRemainder.length; i++, remaining--) {
+    byRemainder[i].floor += 1;
+  }
+
+  return scaled
+    .filter((s) => s.floor > 0)
+    .map((s) => ({ pct: s.floor, etf: ETF_PRESETS[s.name], name: s.name }));
+}
+
+function parseMixShortAllocations(mixShort, deps) {
   const parts = String(mixShort || "").split("-");
   const allocations = [];
 
   for (const part of parts) {
     const match = part.match(/^(\d+)(\w+)$/);
     if (!match) continue;
-
-    const etf = ETF_PRESETS[match[2]];
-    if (!etf) continue;
-
-    allocations.push({ pct: Number(match[1]), etf, name: match[2] });
+    allocations.push({ pct: Number(match[1]), name: match[2] });
   }
 
-  return allocations;
+  return normalizeMixAllocations(allocations, deps);
 }
 
 function buildMixSimulationState(allocations, baseState, deps) {
@@ -140,6 +177,8 @@ function buildMixSimulationState(allocations, baseState, deps) {
 }
 
 module.exports = {
+  hasOwnKey,
+  normalizeMixAllocations,
   parseDcaCommand,
   parseCompareCommand,
   parseMixShortAllocations,
